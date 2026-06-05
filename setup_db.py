@@ -2,8 +2,54 @@
 
 import sqlite3
 import os
+import requests
+from urllib.parse import quote
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "db", "inventory.db")
+
+
+def fetch_pubchem_data(substance_name: str):
+    """
+    Given a substance name, fetches its chemical formula and PubChem link.
+    """
+
+    encoded_name = quote(substance_name)
+
+    url = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
+        f"{encoded_name}/property/MolecularFormula/JSON"
+    )
+
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+        props = data["PropertyTable"]["Properties"][0]
+
+        cid = props["CID"]
+        formula = props.get("MolecularFormula", "N/A")
+        pubchem_url = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}"
+
+        return {
+            "name": substance_name,
+            "cid": cid,
+            "formula": formula,
+            "pubchem_url": pubchem_url
+        }
+
+    except requests.exceptions.RequestException as e:
+        print(f"Network/API error for '{substance_name}': {e}")
+        return None
+
+    except KeyError:
+        print(f"Unexpected response format for '{substance_name}'")
+        return None
+
+    except IndexError:
+        print(f"No PubChem result found for '{substance_name}'")
+        return None
+
 
 def create_and_populate():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -18,13 +64,13 @@ def create_and_populate():
             rfid_tag_id         TEXT UNIQUE NOT NULL,
             substance_name      TEXT NOT NULL,
             chemical_formula    TEXT DEFAULT 'N/A',
-            pubchem_url         TEXT NOT NULL,
+            pubchem_url         TEXT DEFAULT '',
             sigmaaldrich_url    TEXT DEFAULT '',
-            initial_quantity    REAL DEFAULT NULL,       -- e.g. 500.0
-            unit                TEXT DEFAULT NULL,       -- 'mL', 'g', etc.
+            initial_quantity    REAL DEFAULT NULL,
+            unit                TEXT DEFAULT NULL,
             location            TEXT DEFAULT 'Shelf A',
             primary_hazard      TEXT DEFAULT '',
-            state               TEXT DEFAULT 'ON_SHELF', -- 'ON_SHELF' | 'IN_USE'
+            state               TEXT DEFAULT 'ON_SHELF',
             registered_at       TEXT DEFAULT (datetime('now'))
         )
     """)
@@ -36,8 +82,8 @@ def create_and_populate():
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             rfid_tag_id         TEXT NOT NULL,
             taken_at            TEXT NOT NULL,
-            returned_at         TEXT DEFAULT NULL,       -- NULL while IN_USE
-            session_duration_s  REAL DEFAULT NULL,       -- seconds, filled on return
+            returned_at         TEXT DEFAULT NULL,
+            session_duration_s  REAL DEFAULT NULL,
             FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id)
         )
     """)
@@ -49,9 +95,9 @@ def create_and_populate():
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             rfid_tag_id         TEXT NOT NULL,
             session_id          INTEGER NOT NULL,
-            estimated_remaining REAL NOT NULL,           -- in substance's unit
-            consumption_rate    REAL NOT NULL,           -- units per minute
-            feedback            TEXT DEFAULT NULL,       -- 'YES' | 'NO' | NULL (no answer)
+            estimated_remaining REAL NOT NULL,
+            consumption_rate    REAL NOT NULL,
+            feedback            TEXT DEFAULT NULL,
             recorded_at         TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id),
             FOREIGN KEY (session_id) REFERENCES sessions(id)
@@ -78,22 +124,22 @@ def create_and_populate():
         CREATE TABLE IF NOT EXISTS alerts (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             rfid_tag_id         TEXT NOT NULL,
-            alert_type          TEXT NOT NULL,   -- 'LOW_STOCK' | 'OVERDUE' | 'ANOMALY'
+            alert_type          TEXT NOT NULL,
             message             TEXT,
-            resolved            INTEGER DEFAULT 0,  -- 0=open, 1=resolved
+            resolved            INTEGER DEFAULT 0,
             created_at          TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id)
         )
     """)
 
     # --- CONSUMPTION_RATES TABLE ---
-    # Per-substance learned rate (updated over time)
+    # Per-substance learned rate, updated over time
     c.execute("""
         CREATE TABLE IF NOT EXISTS consumption_rates (
             rfid_tag_id         TEXT PRIMARY KEY,
-            rate_per_usage      REAL NOT NULL DEFAULT 0.5,  -- units/usage, seed value
-            n_sessions          INTEGER DEFAULT 0,           -- how many sessions trained on
-            rate_variance       REAL DEFAULT 100.0,          -- Bayesian variance of the rate
+            rate_per_usage      REAL NOT NULL DEFAULT 0.5,
+            n_sessions          INTEGER DEFAULT 0,
+            rate_variance       REAL DEFAULT 100.0,
             last_updated        TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id)
         )
@@ -102,13 +148,87 @@ def create_and_populate():
     conn.commit()
 
     # --- POPULATE DEMO SUBSTANCES ---
-    demo_substances = [
-        ("tag1", "Sodium Chloride",          "ClNa",            "https://pubchem.ncbi.nlm.nih.gov/compound/5234",     "https://www.sigmaaldrich.com/IT/it/search/7647-14-5?focus=products&page=1&perpage=15&sort=relevance&term=7647-14-5&type=cas_number", 200.0, "g",  "Shelf A", "Corrosive"),
-        ("tag2", "Phosphate Buffered Saline","Cl2H3K2Na3O8P2", "https://pubchem.ncbi.nlm.nih.gov/compound/24978514",  "https://www.sigmaaldrich.com/IT/it/search/phosphate-buffered-saline?focus=products&page=1&perpage=15&sort=relevance&term=Phosphate%20Buffered%20Saline&type=product", 1.0,   "L",  "Shelf A", ""),
-        ("tag3", "Cholesterol",              "C27H46O",         "https://pubchem.ncbi.nlm.nih.gov/compound/5997",      "https://www.sigmaaldrich.com/IT/it/search/57-88-5?focus=products&page=1&perpage=15&sort=relevance&term=57-88-5&type=cas_number", 1.0,   "g",  "Shelf A", ""),
-        ("tag4", "Acetylamino",              "C28H44N2O23",     "https://pubchem.ncbi.nlm.nih.gov/compound/24728612",  "https://www.sigmaaldrich.com/IT/it/search/acetylamino?focus=products&page=1&perpage=15&sort=relevance&term=acetylamino&type=product", 5.0,   "g",  "Shelf A", ""),
-        ("tag5", "Sodium Tripolyphosphate",  "Na5P3O10",        "https://pubchem.ncbi.nlm.nih.gov/compound/24455",     "https://www.sigmaaldrich.com/IT/it/search/7758-29-4?focus=products&page=1&perpage=15&sort=relevance&term=7758-29-4&type=cas_number", 1.0,   "kg", "Shelf A", "Irritant"),
+    # Qui restano manuali solo i dati fisici/locali del laboratorio.
+    # Formula chimica e PubChem URL vengono recuperati automaticamente da PubChem.
+
+    demo_substances_input = [
+        {
+            "rfid_tag_id": "tag1",
+            "display_name": "Sodium Chloride",
+            "pubchem_query": "Sodium Chloride",
+            "sigmaaldrich_url": "https://www.sigmaaldrich.com/IT/it/search/7647-14-5?focus=products&page=1&perpage=15&sort=relevance&term=7647-14-5&type=cas_number",
+            "initial_quantity": 200.0,
+            "unit": "g",
+            "location": "Shelf A",
+            "primary_hazard": "Corrosive"
+        },
+        {
+            "rfid_tag_id": "tag2",
+            "display_name": "Phosphate Buffered Saline",
+            "pubchem_query": "Phosphate Buffered Saline",
+            "sigmaaldrich_url": "https://www.sigmaaldrich.com/IT/it/search/phosphate-buffered-saline?focus=products&page=1&perpage=15&sort=relevance&term=Phosphate%20Buffered%20Saline&type=product",
+            "initial_quantity": 1.0,
+            "unit": "L",
+            "location": "Shelf A",
+            "primary_hazard": ""
+        },
+        {
+            "rfid_tag_id": "tag3",
+            "display_name": "Cholesterol",
+            "pubchem_query": "Cholesterol",
+            "sigmaaldrich_url": "https://www.sigmaaldrich.com/IT/it/search/57-88-5?focus=products&page=1&perpage=15&sort=relevance&term=57-88-5&type=cas_number",
+            "initial_quantity": 1.0,
+            "unit": "g",
+            "location": "Shelf A",
+            "primary_hazard": ""
+        },
+        {
+            "rfid_tag_id": "tag4",
+            "display_name": "Acetylamino",
+            "pubchem_query": "Oligo Hyaluronic Acid",
+            "sigmaaldrich_url": "https://www.sigmaaldrich.com/IT/it/search/acetylamino?focus=products&page=1&perpage=15&sort=relevance&term=acetylamino&type=product",
+            "initial_quantity": 5.0,
+            "unit": "g",
+            "location": "Shelf A",
+            "primary_hazard": ""
+        },
+        {
+            "rfid_tag_id": "tag5",
+            "display_name": "Sodium Tripolyphosphate",
+            "pubchem_query": "Pentasodium triphosphate",
+            "sigmaaldrich_url": "https://www.sigmaaldrich.com/IT/it/search/7758-29-4?focus=products&page=1&perpage=15&sort=relevance&term=7758-29-4&type=cas_number",
+            "initial_quantity": 1.0,
+            "unit": "kg",
+            "location": "Shelf A",
+            "primary_hazard": "Irritant"
+        },
     ]
+
+    demo_substances = []
+
+    for item in demo_substances_input:
+        pubchem_data = fetch_pubchem_data(item["pubchem_query"])
+
+        if pubchem_data is None:
+            print(f"Using fallback values for '{item['display_name']}'")
+
+            chemical_formula = "N/A"
+            pubchem_url = ""
+        else:
+            chemical_formula = pubchem_data["formula"]
+            pubchem_url = pubchem_data["pubchem_url"]
+
+        demo_substances.append((
+            item["rfid_tag_id"],
+            item["display_name"],
+            chemical_formula,
+            pubchem_url,
+            item["sigmaaldrich_url"],
+            item["initial_quantity"],
+            item["unit"],
+            item["location"],
+            item["primary_hazard"]
+        ))
 
     c.executemany("""
         INSERT OR IGNORE INTO substances
@@ -121,9 +241,9 @@ def create_and_populate():
     seed_rates = [
         ("tag1", 20.0),    # NaCl: 20g/usage
         ("tag2", 0.3),     # PBS: 0.3L/usage
-        ("tag3", 0.05),    # Cholesterol: 50mg/usage (0.05g)
-        ("tag4", 0.1),     # Acetylamino: 100mg/usage (0.1g)
-        ("tag5", 0.001),   # Sodium Tripolyphosphate: 1g/usage (0.001kg)
+        ("tag3", 0.05),    # Cholesterol: 50mg/usage
+        ("tag4", 0.1),     # Acetylamino/Oligo Hyaluronic Acid: 100mg/usage
+        ("tag5", 0.001),   # Sodium Tripolyphosphate: 1g/usage
     ]
 
     c.executemany("""
@@ -133,8 +253,19 @@ def create_and_populate():
 
     conn.commit()
     conn.close()
+
     print(f"Database initialized at: {DB_PATH}")
     print(f"Inserted {len(demo_substances)} demo substances.")
+
+    print("\nInserted substances:")
+    for substance in demo_substances:
+        print("-------------------------")
+        print(f"RFID tag: {substance[0]}")
+        print(f"Name: {substance[1]}")
+        print(f"Formula: {substance[2]}")
+        print(f"PubChem URL: {substance[3]}")
+        print(f"Initial quantity: {substance[5]} {substance[6]}")
+
 
 if __name__ == "__main__":
     create_and_populate()
