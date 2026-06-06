@@ -1,0 +1,51 @@
+import os
+import sys
+import time
+import subprocess
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# ── Monkey patch to fix Arduino bug: app-bricks-py#236 ───────────────────────
+from arduino.app_utils import AppController, App, Bridge
+
+def _patched_loop(self, user_loop=None):
+    try:
+        if user_loop:
+            while True:
+                user_loop()
+        else:
+            while True:
+                time.sleep(10)
+    except (StopIteration, KeyboardInterrupt):
+        pass
+
+AppController.loop = _patched_loop
+
+# ── Your imports ──────────────────────────────────────────────────────────────
+from setup_db import create_and_populate
+from db_utils import add_pending_scan
+
+# ── 1. Database setup ─────────────────────────────────────────────────────────
+print("Initializing Database...")
+create_and_populate()
+
+# ── 2. Launch dashboard.py as a subprocess on port 7000 ──────────────────────
+dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.py")
+print("Starting Streamlit dashboard...")
+subprocess.Popen([
+    sys.executable, "-m", "streamlit", "run", dashboard_path,
+    "--server.port", "7000",
+    "--server.address", "0.0.0.0",
+    "--server.headless", "true",
+])
+
+# ── 3. Bridge RPC handler ─────────────────────────────────────────────────────
+def on_rfid_scan(tag_id: str):
+    print(f"[Hardware Event] RFID Scan detected: {tag_id}")
+    add_pending_scan(tag_id)
+
+Bridge.provide("rfid_scan", on_rfid_scan)
+print("Bridge RPC handler registered. Dashboard at http://192.168.1.112:7000")
+
+# ── 4. App.run() owns the main thread ────────────────────────────────────────
+App.run()

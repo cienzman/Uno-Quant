@@ -1,0 +1,6 @@
+name: Smart Lab Inventory
+description: RFID-based chemical inventory end-to-end system
+ports:
+- 7000
+bricks: []
+icon: 🧪

@@ -41,7 +41,7 @@ Make sure you have Python 3.10+ installed.
 Open your terminal and clone the repository (if you haven't already):
 ```bash
 # Navigate to the project directory
-cd INTELLIGENT_ENVIRONMENT
+cd SMART_LAB_INVENTORY
 
 # Create a virtual environment
 python -m venv .venv
@@ -53,7 +53,7 @@ source .venv/bin/activate
 # .venv\Scripts\activate
 
 # Install the required packages
-pip install -r Dashboard/requirements.txt
+pip install -r requirements.txt
 ```
 
 ### Step 2: Initialize the Database
@@ -70,6 +70,13 @@ cd Dashboard
 streamlit run dashboard.py
 ```
 A browser window should automatically open at `http://localhost:8501`.
+
+to reset the db: 
+```bash
+cd ArduinoApps/smart-lab-inventory/python
+python3 setup_db.py
+```
+
 
 ### Step 4: Try the Demo Workflow
 1. In the dashboard sidebar, under **Demo controls**, click the button for **"Sodium Chloride"**.

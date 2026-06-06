@@ -1,0 +1,10 @@
+profiles:
+  default:
+    fqbn: 
+    platforms:
+      - platform: arduino:zephyr
+    libraries:
+      - AMRFID (1.0.1)
+      - dependency: MFRC522 (1.4.12)
+
+default_profile: default

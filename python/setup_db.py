@@ -145,6 +145,16 @@ def create_and_populate():
         )
     """)
 
+    # --- PENDING_SCANS TABLE ---
+    # Hardware scans queuing to bridge Arduino to Streamlit
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pending_scans (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag_id              TEXT NOT NULL,
+            timestamp           TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
     conn.commit()
 
     # --- POPULATE DEMO SUBSTANCES ---
@@ -153,7 +163,7 @@ def create_and_populate():
 
     demo_substances_input = [
         {
-            "rfid_tag_id": "tag1",
+            "rfid_tag_id": "CA398D32",
             "display_name": "Sodium Chloride",
             "pubchem_query": "Sodium Chloride",
             "sigmaaldrich_url": "https://www.sigmaaldrich.com/IT/it/search/7647-14-5?focus=products&page=1&perpage=15&sort=relevance&term=7647-14-5&type=cas_number",
@@ -163,7 +173,7 @@ def create_and_populate():
             "primary_hazard": "Corrosive"
         },
         {
-            "rfid_tag_id": "tag2",
+            "rfid_tag_id": "8049D13E",
             "display_name": "Phosphate Buffered Saline",
             "pubchem_query": "Phosphate Buffered Saline",
             "sigmaaldrich_url": "https://www.sigmaaldrich.com/IT/it/search/phosphate-buffered-saline?focus=products&page=1&perpage=15&sort=relevance&term=Phosphate%20Buffered%20Saline&type=product",
@@ -239,11 +249,11 @@ def create_and_populate():
     # Seed consumption rates for each substance
     # These are initial guesses — the model will refine them
     seed_rates = [
-        ("tag1", 20.0),    # NaCl: 20g/usage
-        ("tag2", 0.3),     # PBS: 0.3L/usage
-        ("tag3", 0.05),    # Cholesterol: 50mg/usage
-        ("tag4", 0.1),     # Acetylamino/Oligo Hyaluronic Acid: 100mg/usage
-        ("tag5", 0.001),   # Sodium Tripolyphosphate: 1g/usage
+    ("CA398D32", 20.0),   # NaCl: 20g/usage
+    ("8049D13E", 0.3),    # PBS: 0.3L/usage
+    ("tag3", 0.05),       # Cholesterol
+    ("tag4", 0.1),        # Acetylamino
+    ("tag5", 0.001),      # Sodium Tripolyphosphate
     ]
 
     c.executemany("""
@@ -269,3 +279,14 @@ def create_and_populate():
 
 if __name__ == "__main__":
     create_and_populate()
+
+def reset_db():
+    """Delete and fully recreate the database from scratch."""
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+        print(f"Deleted existing database at: {DB_PATH}")
+    create_and_populate()
+    print("Database reset complete.")
+
+if __name__ == "__main__":
+    reset_db()

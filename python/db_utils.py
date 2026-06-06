@@ -190,3 +190,19 @@ def get_open_alerts() -> list[dict]:
             "SELECT * FROM alerts WHERE resolved = 0 ORDER BY created_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+# ── Hardware Pending Scans ────────────────────────────────────────
+
+def add_pending_scan(tag_id: str):
+    with get_conn() as conn:
+        conn.execute("INSERT INTO pending_scans (tag_id) VALUES (?)", (tag_id,))
+
+def get_and_clear_pending_scans() -> list[str]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, tag_id FROM pending_scans ORDER BY timestamp ASC").fetchall()
+        if not rows:
+            return []
+        
+        ids = [str(r["id"]) for r in rows]
+        conn.execute(f"DELETE FROM pending_scans WHERE id IN ({','.join(ids)})")
+        return [r["tag_id"] for r in rows]
