@@ -5,7 +5,7 @@ from datetime import datetime
 DB_PATH = os.path.join(os.path.dirname(__file__), "db", "inventory.db")
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row  # rows behave like dicts
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -93,7 +93,7 @@ def get_last_session(rfid_tag_id: str) -> dict | None:
 # ── Quantity Updates ──────────────────────────────────────────────
 
 def update_substance_quantity(rfid_tag_id: str, quantity_level: str):
-    assert quantity_level in ("A LOT", "MEDIUM", "LITTLE", "UNKNOWN")
+    assert quantity_level in ("A LOT", "MEDIUM", "LOW", "UNKNOWN")
     with get_conn() as conn:
         conn.execute(
             "UPDATE substances SET quantity_level = ? WHERE rfid_tag_id = ?",

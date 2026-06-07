@@ -20,6 +20,8 @@ from db_utils import (
 )
 
 from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
+import voice_state
 
 
 from inventory_logic import (
@@ -178,7 +180,7 @@ def load_inventory_from_db():
         inventory[s["rfid_tag_id"]] = {
             "name": s["substance_name"],
             "chemical_formula": s["chemical_formula"],
-            "status": "Present" if s["state"] == "ON_SHELF" else "Checked out",
+            "status": "ON SHELF" if s["state"] == "ON_SHELF" else "IN USE",
             "location": s["location"],
             "hazard": s["primary_hazard"],
             "quantity_level": s["quantity_level"],
@@ -201,11 +203,13 @@ def initialize_state():
         st.session_state.open_url = None
     if "pending_feedback" not in st.session_state:
         st.session_state.pending_feedback = None
+        voice_state.clear()
 
 
 def handle_feedback(level: str, fb: dict):
     update_substance_quantity(fb["tag_id"], level)
     st.session_state.pending_feedback = None
+    voice_state.clear()
     st.session_state.inventory = load_inventory_from_db()
 
 
@@ -214,7 +218,7 @@ def inventory_to_dataframe(inventory):
     quantity_emojis = {
         "A LOT": "🟢 A LOT",
         "MEDIUM": "🟡 MEDIUM",
-        "LITTLE": "🔴 LITTLE",
+        "LOW": "🔴 LOW",
         "UNKNOWN": "⚪ UNKNOWN"
     }
     
@@ -287,6 +291,7 @@ def run_scan(tag_id: str):
                 "session_id": session_info["id"],
                 "item_name": name
             }
+            voice_state.set_pending_feedback(tag_id, name)
 
         st.session_state.last_event = {
             "event_type": "Check-in",
@@ -334,6 +339,8 @@ with st.sidebar:
         st.session_state.inventory = load_inventory_from_db()
         st.session_state.last_event = None
         st.session_state.open_url = None
+        st.session_state.pending_feedback = None
+        voice_state.clear()
         st.rerun()
 
     if st.button("🗑  Clear events log", use_container_width=True):
@@ -380,6 +387,14 @@ if st.session_state.get("open_url"):
     st.components.v1.iframe(st.session_state.open_url, height=500, scrolling=True)
 
 # ── Micro-feedback ────────────────────────────────────────────────────────────
+vstate = voice_state.get_pending_feedback()
+if vstate.get("feedback_resolved"):
+    st.success(f"Voice recorded: {vstate['resolved_level']}")
+    st.session_state.pending_feedback = None
+    st.session_state.inventory = load_inventory_from_db()
+    voice_state.clear()
+    st.rerun()
+
 if st.session_state.get("pending_feedback"):
     fb = st.session_state.pending_feedback
     st.markdown(f"#### 📋 Quick check — {fb['item_name']}")
@@ -391,11 +406,12 @@ if st.session_state.get("pending_feedback"):
     if c2.button("🟡 MEDIUM", use_container_width=True, key=f"fb_medium_{fb['session_id']}"):
         handle_feedback("MEDIUM", fb)
         st.rerun()
-    if c3.button("🔴 LITTLE", use_container_width=True, key=f"fb_little_{fb['session_id']}"):
-        handle_feedback("LITTLE", fb)
+    if c3.button("🔴 LOW", use_container_width=True, key=f"fb_little_{fb['session_id']}"):
+        handle_feedback("LOW", fb)
         st.rerun()
     if c4.button("Skip", use_container_width=True, key=f"fb_dismiss_{fb['session_id']}"):
         st.session_state.pending_feedback = None
+        voice_state.clear()
         st.rerun()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -556,3 +572,163 @@ Browser (any device on Wi-Fi)
         "The dashboard is hardware-independent. "
         "Replace the simulated button events with real RFID tag IDs from Arduino UNO Q."
     )
+
+# ── Voice Widget ──────────────────────────────────────────────────────────────
+VOICE_WIDGET_HTML = """
+<div id="voice-widget" style="position:fixed;bottom:24px;right:24px;z-index:9999">
+  <button id="micBtn" onclick="toggleVoice()"
+    style="width:56px;height:56px;border-radius:50%;border:none;
+           background:#E53E3E;color:white;font-size:24px;cursor:pointer">
+    🎙
+  </button>
+  <div id="voiceStatus" style="text-align:center;font-size:11px;color:#666;margin-top:4px">
+    Off
+  </div>
+</div>
+<script>
+// ── State ──────────────────────────────────────────────────────
+let ws = null, audioCtx = null, workletNode = null, isActive = false, isStarting = false;
+
+let isHttps = location.protocol === "https:";
+try {
+  if (window.parent && window.parent.location.protocol === "https:") {
+    isHttps = true;
+  }
+} catch(e) {}
+const protocol = isHttps ? "wss://" : "ws://";
+
+let host = "";
+try { host = window.parent.location.hostname; } catch(e) {}
+if (!host) { host = window.location.hostname; }
+if (!host) { host = "localhost"; }
+
+const WS_URL = protocol + host + ":8502/ws/voice";
+const STATE_URL = (isHttps ? "https://" : "http://") + host + ":8502/state";
+
+// ── Audio playback queue ──────────────────────────────────────
+const audioQueue = [];
+let isPlaying = false;
+
+// ── Auto-start Polling ────────────────────────────────────────
+setInterval(async () => {
+    try {
+        const res = await fetch(STATE_URL);
+        const state = await res.json();
+        
+        // Auto-start if there's pending feedback and we aren't active
+        if (state.pending_tag_id && !state.feedback_resolved && !isActive) {
+            console.log("Auto-starting voice for pending feedback:", state.pending_item_name);
+            await startVoice();
+        }
+        
+        // Auto-stop if feedback is resolved or cleared, and we are active
+        if ((!state.pending_tag_id || state.feedback_resolved) && isActive) {
+            console.log("Auto-stopping voice as feedback is resolved or cleared");
+            stopVoice();
+        }
+    } catch(e) {}
+}, 2000);
+
+async function playNext() {
+  if (isPlaying || audioQueue.length === 0) return;
+  isPlaying = true;
+  const pcm = audioQueue.shift();
+  const samples = new Int16Array(pcm);
+  const float32 = new Float32Array(samples.length);
+  for (let i = 0; i < samples.length; i++)
+    float32[i] = samples[i] / 32768.0;
+  const buf = audioCtx.createBuffer(1, float32.length, 24000);
+  buf.getChannelData(0).set(float32);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  src.onended = () => { isPlaying = false; playNext(); };
+  src.start();
+}
+
+// ── Toggle ─────────────────────────────────────────────────────
+async function toggleVoice() {
+  isActive ? stopVoice() : await startVoice();
+}
+
+async function startVoice() {
+  if (isActive || isStarting) return;
+  isStarting = true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("Microphone access is not supported. Ensure you are accessing the dashboard via HTTPS.");
+    isStarting = false;
+    return;
+  }
+  try {
+    audioCtx = new AudioContext({ sampleRate: 16000 });
+    
+    const workletCode = `
+      class PCMProcessor extends AudioWorkletProcessor {
+          process(inputs, outputs, parameters) {
+              const input = inputs[0];
+              if (input.length > 0) {
+                  const channelData = input[0];
+                  const pcm16 = new Int16Array(channelData.length);
+                  for (let i = 0; i < channelData.length; i++) {
+                      let s = Math.max(-1, Math.min(1, channelData[i]));
+                      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                  }
+                  this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
+              }
+              return true;
+          }
+      }
+      registerProcessor('pcm-processor', PCMProcessor);
+    `;
+    const b64 = btoa(workletCode);
+    const dataUri = 'data:application/javascript;base64,' + b64;
+    
+    await audioCtx.audioWorklet.addModule(dataUri);
+    if (!audioCtx) return;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!audioCtx) return;
+    const source = audioCtx.createMediaStreamSource(stream);
+    workletNode = new AudioWorkletNode(audioCtx, "pcm-processor");
+    source.connect(workletNode);
+
+    ws = new WebSocket(WS_URL);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => { isActive = true; isStarting = false; updateUI(true); };
+    ws.onerror = (e) => {
+        isStarting = false;
+        alert("WebSocket connection failed. If you are using HTTPS with a self-signed certificate, your browser is blocking the Voice Assistant on port 8502. \\n\\nPlease open https://" + host + ":8502 in a new tab, accept the security warning ('Advanced' -> 'Proceed'), and then return here to try again.");
+    };
+    ws.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) {
+        audioQueue.push(e.data);
+        playNext();
+      }
+    };
+    ws.onclose = () => stopVoice();
+
+    workletNode.port.onmessage = (e) => {
+      if (ws && ws.readyState === 1) ws.send(e.data);
+    };
+  } catch (err) {
+    isStarting = false;
+    console.error(err);
+    alert("Error starting voice: " + err.message);
+    stopVoice();
+  }
+}
+
+function stopVoice() {
+  ws && ws.close();
+  if (audioCtx) { audioCtx.close(); }
+  ws = null; audioCtx = null; isActive = false; isStarting = false;
+  updateUI(false);
+}
+
+function updateUI(on) {
+  document.getElementById("micBtn").style.background = on ? "#38A169" : "#E53E3E";
+  document.getElementById("voiceStatus").textContent = on ? "Listening" : "Off";
+}
+</script>
+"""
+
+components.html(VOICE_WIDGET_HTML, height=100)
