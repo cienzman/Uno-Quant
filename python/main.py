@@ -34,7 +34,7 @@ dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.py")
 print("Starting Streamlit dashboard...")
 subprocess.Popen([
     sys.executable, "-m", "streamlit", "run", dashboard_path,
-    "--server.port", "7000",
+    "--server.port", "8501",
     "--server.address", "0.0.0.0",
     "--server.headless", "true",
 ])
@@ -45,7 +45,7 @@ def on_rfid_scan(tag_id: str):
     add_pending_scan(tag_id)
 
 Bridge.provide("rfid_scan", on_rfid_scan)
-print("Bridge RPC handler registered. Dashboard at http://192.168.1.112:7000")
+print("Bridge RPC handler registered. Dashboard at http://192.168.1.112:8501")
 
 # ── 4. App.run() owns the main thread ────────────────────────────────────────
 App.run()

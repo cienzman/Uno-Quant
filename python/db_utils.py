@@ -88,92 +88,17 @@ def get_last_session(rfid_tag_id: str) -> dict | None:
         """, (rfid_tag_id,)).fetchone()
         return dict(row) if row else None
 
-def get_avg_session_duration(rfid_tag_id: str) -> float:
-    with get_conn() as conn:
-        row = conn.execute("""
-            SELECT AVG(session_duration_s) as avg_duration 
-            FROM sessions 
-            WHERE rfid_tag_id = ? AND session_duration_s IS NOT NULL
-        """, (rfid_tag_id,)).fetchone()
-        return row["avg_duration"] if row and row["avg_duration"] else 0.0
 
-def get_sessions_per_day(rfid_tag_id: str) -> float:
-    with get_conn() as conn:
-        row = conn.execute("""
-            SELECT MIN(taken_at) as first_taken, COUNT(*) as count 
-            FROM sessions 
-            WHERE rfid_tag_id = ?
-        """, (rfid_tag_id,)).fetchone()
-        
-        if not row or not row["first_taken"] or row["count"] == 0:
-            return 1.0 # default to 1 session per day
-            
-        first_taken_dt = datetime.fromisoformat(row["first_taken"])
-        days_since_first = (datetime.now() - first_taken_dt).total_seconds() / (24 * 3600)
-        
-        # Avoid division by zero and cap to max 1 day if it's less than a day
-        days_since_first = max(1.0, days_since_first)
-        
-        return row["count"] / days_since_first
 
-# ── Quantity estimates ────────────────────────────────────────────
+# ── Quantity Updates ──────────────────────────────────────────────
 
-def get_latest_estimate(rfid_tag_id: str) -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("""
-            SELECT * FROM quantity_estimates
-            WHERE rfid_tag_id = ?
-            ORDER BY recorded_at DESC LIMIT 1
-        """, (rfid_tag_id,)).fetchone()
-        return dict(row) if row else None
-
-def save_estimate(rfid_tag_id: str, session_id: int,
-                  estimated_remaining: float, consumption_rate: float) -> int:
-    with get_conn() as conn:
-        cur = conn.execute("""
-            INSERT INTO quantity_estimates
-                (rfid_tag_id, session_id, estimated_remaining, consumption_rate)
-            VALUES (?, ?, ?, ?)
-        """, (rfid_tag_id, session_id, estimated_remaining, consumption_rate))
-        return cur.lastrowid
-
-def save_feedback(session_id: int, feedback: str):
-    assert feedback in ("YES", "NO")
+def update_substance_quantity(rfid_tag_id: str, quantity_level: str):
+    assert quantity_level in ("A LOT", "MEDIUM", "LITTLE", "UNKNOWN")
     with get_conn() as conn:
         conn.execute(
-            "UPDATE quantity_estimates SET feedback = ? WHERE session_id = ?",
-            (feedback, session_id)
+            "UPDATE substances SET quantity_level = ? WHERE rfid_tag_id = ?",
+            (quantity_level, rfid_tag_id)
         )
-
-def save_micro_feedback(rfid_tag_id: str, session_id: int, enough_for_next: bool, estimated_qty: float):
-    with get_conn() as conn:
-        conn.execute("""
-            INSERT INTO quantity_feedback
-                (rfid_tag_id, session_id, enough_for_next, estimated_qty_at_feedback)
-            VALUES (?, ?, ?, ?)
-        """, (rfid_tag_id, session_id, enough_for_next, estimated_qty))
-
-# ── Consumption rates ─────────────────────────────────────────────
-
-def get_rate(rfid_tag_id: str) -> tuple[float, int, float]:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT rate_per_usage, n_sessions, rate_variance FROM consumption_rates WHERE rfid_tag_id = ?",
-            (rfid_tag_id,)
-        ).fetchone()
-        return (row["rate_per_usage"], row["n_sessions"], row["rate_variance"]) if row else (0.5, 0, 100.0)
-
-def update_rate(rfid_tag_id: str, new_rate: float, n_sessions: int, rate_variance: float = 100.0):
-    with get_conn() as conn:
-        conn.execute("""
-            INSERT INTO consumption_rates (rfid_tag_id, rate_per_usage, n_sessions, rate_variance, last_updated)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(rfid_tag_id) DO UPDATE SET
-                rate_per_usage = excluded.rate_per_usage,
-                n_sessions = excluded.n_sessions,
-                rate_variance = excluded.rate_variance,
-                last_updated = excluded.last_updated
-        """, (rfid_tag_id, new_rate, n_sessions, rate_variance, datetime.now().isoformat()))
 
 # ── Alerts ────────────────────────────────────────────────────────
 

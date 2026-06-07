@@ -71,6 +71,7 @@ def create_and_populate():
             location            TEXT DEFAULT 'Shelf A',
             primary_hazard      TEXT DEFAULT '',
             state               TEXT DEFAULT 'ON_SHELF',
+            quantity_level      TEXT DEFAULT 'UNKNOWN',
             registered_at       TEXT DEFAULT (datetime('now'))
         )
     """)
@@ -88,37 +89,6 @@ def create_and_populate():
         )
     """)
 
-    # --- QUANTITY_ESTIMATES TABLE ---
-    # Running quantity estimate after each session
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS quantity_estimates (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            rfid_tag_id         TEXT NOT NULL,
-            session_id          INTEGER NOT NULL,
-            estimated_remaining REAL NOT NULL,
-            consumption_rate    REAL NOT NULL,
-            feedback            TEXT DEFAULT NULL,
-            recorded_at         TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id),
-            FOREIGN KEY (session_id) REFERENCES sessions(id)
-        )
-    """)
-
-    # --- QUANTITY_FEEDBACK TABLE ---
-    # Micro-feedback from user about remaining quantity
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS quantity_feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rfid_tag_id TEXT NOT NULL,
-            session_id INTEGER NOT NULL,
-            enough_for_next BOOLEAN NOT NULL,
-            estimated_qty_at_feedback REAL NOT NULL,
-            timestamp TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id),
-            FOREIGN KEY (session_id) REFERENCES sessions(id)
-        )
-    """)
-
     # --- ALERTS TABLE ---
     c.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
@@ -128,19 +98,6 @@ def create_and_populate():
             message             TEXT,
             resolved            INTEGER DEFAULT 0,
             created_at          TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id)
-        )
-    """)
-
-    # --- CONSUMPTION_RATES TABLE ---
-    # Per-substance learned rate, updated over time
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS consumption_rates (
-            rfid_tag_id         TEXT PRIMARY KEY,
-            rate_per_usage      REAL NOT NULL DEFAULT 0.5,
-            n_sessions          INTEGER DEFAULT 0,
-            rate_variance       REAL DEFAULT 100.0,
-            last_updated        TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id)
         )
     """)
@@ -245,21 +202,6 @@ def create_and_populate():
             (rfid_tag_id, substance_name, chemical_formula, pubchem_url, sigmaaldrich_url, initial_quantity, unit, location, primary_hazard)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, demo_substances)
-
-    # Seed consumption rates for each substance
-    # These are initial guesses — the model will refine them
-    seed_rates = [
-    ("CA398D32", 20.0),   # NaCl: 20g/usage
-    ("8049D13E", 0.3),    # PBS: 0.3L/usage
-    ("tag3", 0.05),       # Cholesterol
-    ("tag4", 0.1),        # Acetylamino
-    ("tag5", 0.001),      # Sodium Tripolyphosphate
-    ]
-
-    c.executemany("""
-        INSERT OR IGNORE INTO consumption_rates (rfid_tag_id, rate_per_usage)
-        VALUES (?, ?)
-    """, seed_rates)
 
     conn.commit()
     conn.close()

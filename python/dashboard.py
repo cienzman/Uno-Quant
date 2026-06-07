@@ -9,28 +9,18 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from db_utils import (
     get_all_substances,
-    get_latest_estimate,
     get_substance,
     update_substance_state,
     open_session,
     close_session,
     get_last_session,
-    get_rate,
-    update_rate,
-    save_estimate,
     get_conn,
-    get_avg_session_duration,
-    get_sessions_per_day,
-    save_micro_feedback,
+    update_substance_quantity,
     get_and_clear_pending_scans
 )
 
 from streamlit_autorefresh import st_autorefresh
-from predictive_model import (
-    calculate_session_consumption,
-    update_rate_belief,
-    apply_feedback_correction
-)
+
 
 from inventory_logic import (
     count_statuses,
@@ -38,7 +28,6 @@ from inventory_logic import (
     search_inventory,
 )
 from simulated_rfid import get_random_scan, get_named_tags
-from forecast_mock import build_mock_forecast, build_forecast_summary
 
 
 st.set_page_config(
@@ -176,10 +165,7 @@ def load_inventory_from_db():
     inventory = {}
     substances = get_all_substances()
     for s in substances:
-        estimate = get_latest_estimate(s["rfid_tag_id"])
         last_session = get_last_session(s["rfid_tag_id"])
-        rate_mean, n_sessions, rate_var = get_rate(s["rfid_tag_id"])
-        sessions_per_day = get_sessions_per_day(s["rfid_tag_id"])
 
         if last_session:
             if last_session["returned_at"]:
@@ -189,20 +175,15 @@ def load_inventory_from_db():
         else:
             raw_event = f"Registered at {s['registered_at']}"
 
-        current_qty = estimate["estimated_remaining"] if estimate else s["initial_quantity"]
-
         inventory[s["rfid_tag_id"]] = {
             "name": s["substance_name"],
             "chemical_formula": s["chemical_formula"],
             "status": "Present" if s["state"] == "ON_SHELF" else "Checked out",
             "location": s["location"],
             "hazard": s["primary_hazard"],
-            "predicted_quantity": current_qty,
+            "quantity_level": s["quantity_level"],
             "unit": s["unit"],
             "capacity": s["initial_quantity"],
-            "rate_mean": rate_mean,
-            "rate_var": rate_var,
-            "sessions_per_day": sessions_per_day,
             "expiry_date": "N/A",
             "last_event": format_last_event(raw_event),
             "pubchem_url": s["pubchem_url"],
@@ -222,16 +203,21 @@ def initialize_state():
         st.session_state.pending_feedback = None
 
 
-def handle_feedback(feedback_yes: bool, fb: dict):
-    new_qty = apply_feedback_correction(fb["estimated_qty"], fb["rate_per_usage"], feedback_yes)
-    save_micro_feedback(fb["tag_id"], fb["session_id"], feedback_yes, new_qty)
-    save_estimate(fb["tag_id"], fb["session_id"], new_qty, fb["rate_per_usage"])
+def handle_feedback(level: str, fb: dict):
+    update_substance_quantity(fb["tag_id"], level)
     st.session_state.pending_feedback = None
     st.session_state.inventory = load_inventory_from_db()
 
 
 def inventory_to_dataframe(inventory):
     rows = []
+    quantity_emojis = {
+        "A LOT": "🟢 A LOT",
+        "MEDIUM": "🟡 MEDIUM",
+        "LITTLE": "🔴 LITTLE",
+        "UNKNOWN": "⚪ UNKNOWN"
+    }
+    
     for tag_id, item in inventory.items():
         rows.append({
             "Tag ID": tag_id,
@@ -240,7 +226,7 @@ def inventory_to_dataframe(inventory):
             "Status": item["status"],
             "Location": item["location"],
             "Hazard": item["hazard"],
-            "Qty": f"{item.get('predicted_quantity', 'N/A')} {item.get('unit', '')}",
+            "Qty": quantity_emojis.get(item.get('quantity_level', 'UNKNOWN'), "⚪ UNKNOWN"),
             "Expiry": item["expiry_date"],
             "Last Event": item["last_event"],
         })
@@ -296,30 +282,9 @@ def run_scan(tag_id: str):
         session_info = close_session(tag_id)
 
         if session_info and tag_id in st.session_state.inventory:
-            prev_qty = float(st.session_state.inventory[tag_id]["predicted_quantity"])
-            prior_mean, n_sessions, prior_var = get_rate(tag_id)
-
-            avg_duration = get_avg_session_duration(tag_id)
-            session_duration_s = session_info["session_duration_s"]
-            estimated_consumed = calculate_session_consumption(prior_mean, session_duration_s, avg_duration)
-            new_qty = max(0.0, prev_qty - estimated_consumed)
-
-            if avg_duration and avg_duration > 0 and session_duration_s > 0:
-                observed_rate = estimated_consumed / session_duration_s * avg_duration
-            else:
-                observed_rate = estimated_consumed
-
-            likelihood_var = st.session_state.get("likelihood_var", 25.0)
-            posterior_mean, posterior_var = update_rate_belief(prior_mean, prior_var, observed_rate, likelihood_var)
-
-            update_rate(tag_id, posterior_mean, n_sessions + 1, posterior_var)
-            save_estimate(tag_id, session_info["id"], new_qty, posterior_mean)
-
             st.session_state.pending_feedback = {
                 "tag_id": tag_id,
                 "session_id": session_info["id"],
-                "estimated_qty": new_qty,
-                "rate_per_usage": posterior_mean,
                 "item_name": name
             }
 
@@ -362,15 +327,7 @@ with st.sidebar:
         run_scan(get_random_scan())
         st.rerun()
 
-    st.divider()
 
-    st.markdown("### Model settings")
-    likelihood_var = st.number_input(
-        "Observation variance",
-        min_value=1.0, max_value=500.0, value=25.0, step=5.0,
-        help="Higher = trust prior rate more than new observation."
-    )
-    st.session_state.likelihood_var = likelihood_var
 
     st.markdown("### System")
     if st.button("↺  Reset inventory", use_container_width=True):
@@ -426,22 +383,24 @@ if st.session_state.get("open_url"):
 if st.session_state.get("pending_feedback"):
     fb = st.session_state.pending_feedback
     st.markdown(f"#### 📋 Quick check — {fb['item_name']}")
-    st.info(f"Is there enough **{fb['item_name']}** remaining for at least one more experiment?")
-    c1, c2, c3, _ = st.columns([1, 1, 1, 3])
-    if c1.button("✓  Yes", use_container_width=True, key=f"fb_yes_{fb['session_id']}"):
-        handle_feedback(True, fb)
+    st.info(f"How much **{fb['item_name']}** is left?")
+    c1, c2, c3, c4 = st.columns(4)
+    if c1.button("🟢 A LOT", use_container_width=True, key=f"fb_alot_{fb['session_id']}"):
+        handle_feedback("A LOT", fb)
         st.rerun()
-    if c2.button("✕  No", use_container_width=True, key=f"fb_no_{fb['session_id']}"):
-        handle_feedback(False, fb)
+    if c2.button("🟡 MEDIUM", use_container_width=True, key=f"fb_medium_{fb['session_id']}"):
+        handle_feedback("MEDIUM", fb)
         st.rerun()
-    if c3.button("Skip", use_container_width=True, key=f"fb_dismiss_{fb['session_id']}"):
+    if c3.button("🔴 LITTLE", use_container_width=True, key=f"fb_little_{fb['session_id']}"):
+        handle_feedback("LITTLE", fb)
+        st.rerun()
+    if c4.button("Skip", use_container_width=True, key=f"fb_dismiss_{fb['session_id']}"):
         st.session_state.pending_feedback = None
         st.rerun()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_inventory, tab_forecast, tab_alerts, tab_events, tab_voice, tab_architecture = st.tabs([
+tab_inventory, tab_alerts, tab_events, tab_voice, tab_architecture = st.tabs([
     "Inventory",
-    "Consumption forecast",
     "Safety alerts",
     "Event log",
     "Voice assistant",
@@ -482,44 +441,6 @@ with tab_inventory:
     else:
         st.caption("No Sigma-Aldrich reference available for this item.")
 
-# ── Tab: Forecast ─────────────────────────────────────────────────────────────
-with tab_forecast:
-    st.subheader("Consumption forecast")
-    st.caption(
-        "Simulated historical usage with a projected depletion trend. "
-        "Will be replaced by the real Bayesian model output."
-    )
-
-    selected_forecast_tag = st.selectbox(
-        "Select substance",
-        list(st.session_state.inventory.keys()),
-        format_func=lambda tag: st.session_state.inventory[tag]["name"],
-        key="forecast_selectbox",
-    )
-
-    forecast_item = st.session_state.inventory[selected_forecast_tag]
-    forecast_df, forecast_summary = build_mock_forecast(forecast_item)
-
-    f1, f2, f3 = st.columns(3)
-    f1.metric("Remaining", f"{forecast_summary['residual_quantity']} {forecast_summary['unit']}")
-    f2.metric("Avg daily usage", f"{forecast_summary['daily_usage']} {forecast_summary['unit']}/day")
-    f3.metric("Est. depletion", forecast_summary["estimated_depletion_date"])
-
-    chart_df = forecast_df.pivot(index="date", columns="type", values="quantity")
-    st.line_chart(chart_df, use_container_width=True)
-
-    days_remaining = forecast_summary["days_remaining"]
-    if days_remaining is not None:
-        if days_remaining <= 7:
-            st.error(f"⚠️  {forecast_item['name']} may run out in {days_remaining} days.")
-        elif days_remaining <= 14:
-            st.warning(f"{forecast_item['name']} may run out in {days_remaining} days.")
-        else:
-            st.success(f"{forecast_item['name']} should last approximately {days_remaining} days.")
-
-    st.markdown("#### All substances — forecast summary")
-    st.dataframe(build_forecast_summary(st.session_state.inventory), use_container_width=True, hide_index=True)
-
 # ── Tab: Alerts ───────────────────────────────────────────────────────────────
 with tab_alerts:
     st.subheader("Safety & expiration alerts")
@@ -532,12 +453,7 @@ with tab_alerts:
         if item["status"] == "Checked out"
     ]
 
-    forecast_summary_df = build_forecast_summary(st.session_state.inventory)
-    low_stock_df = forecast_summary_df[
-        forecast_summary_df["Days remaining"].apply(lambda x: x is not None and x <= 14)
-    ]
-
-    if not alerts and not checked_out_items and low_stock_df.empty:
+    if not alerts and not checked_out_items:
         st.success("No active alerts.")
     else:
         if alerts:
@@ -551,10 +467,6 @@ with tab_alerts:
                 co_df.style.map(highlight_checked_out, subset=["Status"]),
                 use_container_width=True, hide_index=True,
             )
-
-        if not low_stock_df.empty:
-            st.markdown("##### Low-stock forecast alerts")
-            st.dataframe(low_stock_df, use_container_width=True, hide_index=True)
 
 # ── Tab: Event log ────────────────────────────────────────────────────────────
 with tab_events:
@@ -577,7 +489,7 @@ with tab_voice:
 
     command = st.text_input(
         "Command",
-        placeholder="e.g. where is acetone · missing items · expiring soon · when will ethanol run out",
+        placeholder="e.g. where is acetone · missing items · expiring soon",
     )
 
     if command:
@@ -607,23 +519,8 @@ with tab_voice:
             else:
                 st.success("No substances are expiring soon.")
 
-        elif "run out" in cmd or "finish" in cmd or "terminate" in cmd:
-            matched = None
-            for i in st.session_state.inventory.values():
-                if i["name"].lower() in cmd:
-                    matched = i
-                    break
-            if matched:
-                _, summary = build_mock_forecast(matched)
-                st.info(
-                    f"{matched['name']} is estimated to run out around "
-                    f"**{summary['estimated_depletion_date']}** ({summary['days_remaining']} days remaining)."
-                )
-            else:
-                st.warning("Specify a substance name — e.g. 'when will ethanol run out'.")
-
         else:
-            st.info("Command not recognised. Try: 'where is acetone', 'missing items', 'expiring soon', or 'when will ethanol run out'.")
+            st.info("Command not recognised. Try: 'where is acetone', 'missing items', or 'expiring soon'.")
 
 # ── Tab: Architecture ─────────────────────────────────────────────────────────
 with tab_architecture:
@@ -637,7 +534,7 @@ Sidebar buttons
       ↓
 inventory_logic.py
       ↓
-Streamlit dashboard  ←  forecast_mock.py
+Streamlit dashboard
 
 Production (Arduino UNO Q)
 ──────────────────────────────
@@ -649,7 +546,7 @@ Bridge (Arduino RPC)
       ↓
 Python backend (main.py)  →  SQLite DB
       ↓
-Streamlit dashboard  ←  Bayesian model
+Streamlit dashboard
       ↓
 Browser (any device on Wi-Fi)
 ```
@@ -657,6 +554,5 @@ Browser (any device on Wi-Fi)
 
     st.caption(
         "The dashboard is hardware-independent. "
-        "Replace the simulated button events with real RFID tag IDs from Arduino UNO Q "
-        "and swap forecast_mock.py with the real model output."
+        "Replace the simulated button events with real RFID tag IDs from Arduino UNO Q."
     )
