@@ -19,7 +19,7 @@ from db_utils import (
     get_and_clear_pending_scans
 )
 
-from streamlit_autorefresh import st_autorefresh
+import time
 
 from inventory_logic import (
     count_statuses,
@@ -343,22 +343,75 @@ st.markdown("""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def parse_db_datetime(value):
+    """Parse DB timestamps robustly and avoid malformed demo timestamps in the UI."""
+    if value is None or value == "":
+        return None
+
+    from datetime import datetime, timezone
+
+    if isinstance(value, datetime):
+        return value.astimezone().replace(tzinfo=None) if value.tzinfo else value
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # Unix timestamp support, in case the DB stores seconds/milliseconds.
+    if text.replace(".", "", 1).isdigit():
+        try:
+            number = float(text)
+            if number > 10_000_000_000:  # milliseconds
+                number = number / 1000
+            return datetime.fromtimestamp(number)
+        except (ValueError, OSError, OverflowError):
+            pass
+
+    normalized = text.replace("T", " ").replace("Z", "+00:00")
+
+    # Try ISO parsing first, including timezone offsets and microseconds.
+    try:
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except ValueError:
+        pass
+
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+    ):
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+
+    return None
+
+
+def format_timestamp(value) -> str:
+    """Format timestamps consistently in the dashboard."""
+    dt = parse_db_datetime(value)
+    if not dt:
+        return str(value) if value is not None else "N/A"
+    return dt.strftime("%d %b %Y · %H:%M")
+
+
 def format_last_event(raw: str) -> str:
     """Make last-event strings shorter and consistent."""
-    # e.g. "Returned at 2026-06-06 14:32:11" → "Returned · 06 Jun 14:32"
+    # e.g. "Returned at 2026-06-06 14:32:11" → "Returned · 06 Jun 2026 · 14:32"
     for verb in ("Returned at", "Checked out at", "Registered at"):
         if raw.startswith(verb):
             rest = raw[len(verb):].strip()
-            try:
-                from datetime import datetime
-                dt = datetime.strptime(rest, "%Y-%m-%d %H:%M:%S")
-                short = dt.strftime("%d %b %H:%M")
+            formatted = format_timestamp(rest)
+            if formatted != rest:
                 action = verb.replace(" at", "").replace(" out", " out")
-                return f"{action} · {short}"
-            except ValueError:
-                return raw
+                return f"{action} · {formatted}"
     return raw
-
 
 def load_inventory_from_db():
     inventory = {}
@@ -426,7 +479,6 @@ def inventory_to_dataframe(inventory):
             "Location": item["location"],
             "Hazard": item["hazard"],
             "Qty": quantity_emojis.get(item.get('quantity_level', 'UNKNOWN'), "⚪ UNKNOWN"),
-            "Expiry": item["expiry_date"],
             "Last Event": item["last_event"],
         })
     return pd.DataFrame(rows)
@@ -448,13 +500,16 @@ def load_events():
     events = []
     for r in rows:
         events.append({
-            "Taken At": r["taken_at"],
-            "Returned At": r["returned_at"] if r["returned_at"] else "Still in use",
+            "Taken At": format_timestamp(r["taken_at"]),
+            "Returned At": format_timestamp(r["returned_at"]) if r["returned_at"] else "Still in use",
             "Item Name": r["substance_name"],
             "Tag ID": r["rfid_tag_id"],
-            "Duration (s)": round(r["session_duration_s"], 1) if r["session_duration_s"] else None
+            "Duration (s)": round(r["session_duration_s"], 1) if r["session_duration_s"] else None,
+            "_sort_time": parse_db_datetime(r["taken_at"]),
         })
-    return pd.DataFrame(events)
+
+    df = pd.DataFrame(events)
+    return df
 
 
 def run_scan(tag_id: str):
@@ -586,12 +641,15 @@ def style_inventory_table(df: pd.DataFrame):
 initialize_state()
 
 # Poll hardware RFID scans every 3 s
-st_autorefresh(interval=3000, key="rfid_polling")
-pending_tags = get_and_clear_pending_scans()
-if pending_tags:
-    for p_tag in pending_tags:
-        run_scan(p_tag)
-    st.rerun()
+@st.fragment(run_every=3)
+def poll_rfid():
+    pending_tags = get_and_clear_pending_scans()
+    if pending_tags:
+        for p_tag in pending_tags:
+            run_scan(p_tag)
+        st.rerun()
+
+poll_rfid()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -704,13 +762,149 @@ if st.session_state.get("pending_feedback"):
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ── Browser-based TTS + STT via Web Speech API ────────────────────────────
+    # speechSynthesis speaks the prompt; webkitSpeechRecognition listens;
+    # the recognised answer clicks the matching Streamlit button as a fallback-safe action.
+    substance_name = fb["item_name"]
+    voice_html = f"""
+<div id="voice-status" style="
+    margin-top:10px; padding:10px 14px; border-radius:12px;
+    background:#eef6ff; color:#123047; font-family:Inter,sans-serif;
+    font-size:14px; font-weight:700; border:1px solid #dce4ec;">
+  🎙️ Starting voice prompt…
+</div>
+<script>
+(function() {{
+  var statusEl = document.getElementById('voice-status');
+
+  var prompt = "Quick check for {substance_name}. How much {substance_name} is left? Please say: a lot, medium, little, or skip.";
+  var utterance = new SpeechSynthesisUtterance(prompt);
+  utterance.rate = 0.95;
+  utterance.lang = 'en-US';
+
+  utterance.onstart = function() {{
+    statusEl.textContent = '🔊 Speaking…';
+  }};
+
+  utterance.onend = function() {{
+    statusEl.textContent = '🎙️ Listening… say: A LOT, MEDIUM, LITTLE or SKIP';
+    startListening();
+  }};
+
+  utterance.onerror = function(e) {{
+    statusEl.textContent = '⚠️ TTS error: ' + e.error + ' — use the buttons above.';
+  }};
+
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+
+  function startListening() {{
+    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {{
+      statusEl.textContent = '⚠️ Browser STT not supported — use the buttons above.';
+      return;
+    }}
+
+    var rec = new SpeechRecognition();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    rec.maxAlternatives = 5;
+
+    rec.onresult = function(event) {{
+      var heard = Array.from(event.results[0])
+                       .map(function(a) {{ return a.transcript.toLowerCase(); }})
+                       .join(' ');
+      statusEl.textContent = '✅ Heard: "' + heard + '"';
+
+      var level = classify(heard);
+      if (level) {{
+        statusEl.textContent = '✅ Classified as: ' + level + ' — saving…';
+        postAnswer(level);
+      }} else {{
+        statusEl.textContent = '❓ Not recognised ("' + heard + '") — use the buttons above.';
+      }}
+    }};
+
+    rec.onerror = function(e) {{
+      statusEl.textContent = '⚠️ STT error: ' + e.error + ' — use the buttons above.';
+    }};
+
+    rec.onend = function() {{
+      if (statusEl.textContent.startsWith('🎙️')) {{
+        statusEl.textContent = '⏱️ No speech detected — use the buttons above.';
+      }}
+    }};
+
+    rec.start();
+  }}
+
+  var MAP = [
+    ['a lot',        'A LOT'],
+    ['running out',  'LITTLE'],
+    ['almost empty', 'LITTLE'],
+    ['not much',     'LITTLE'],
+    ['plenty',       'A LOT'],
+    ['enough',       'A LOT'],
+    ['alot',         'A LOT'],
+    ['lots',         'A LOT'],
+    ['lot',          'A LOT'],
+    ['full',         'A LOT'],
+    ['much',         'A LOT'],
+    ['medium',       'MEDIUM'],
+    ['middle',       'MEDIUM'],
+    ['moderate',     'MEDIUM'],
+    ['half',         'MEDIUM'],
+    ['some',         'MEDIUM'],
+    ['little',       'LITTLE'],
+    ['nearly',       'LITTLE'],
+    ['almost',       'LITTLE'],
+    ['few',          'LITTLE'],
+    ['low',          'LITTLE'],
+    ['skip',         'SKIP'],
+    ['ignore',       'SKIP'],
+    ['later',        'SKIP'],
+    ['pass',         'SKIP'],
+    ['no',           'SKIP'],
+  ];
+
+  function classify(text) {{
+    for (var i = 0; i < MAP.length; i++) {{
+      if (text.indexOf(MAP[i][0]) !== -1) return MAP[i][1];
+    }}
+    return null;
+  }}
+
+  var LABEL_MAP = {{
+    'A LOT':  'a lot',
+    'MEDIUM': 'medium',
+    'LITTLE': 'little',
+    'SKIP':   'skip',
+  }};
+
+  function postAnswer(level) {{
+    var targetLabel = LABEL_MAP[level];
+    var buttons = window.parent.document.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {{
+      var btn = buttons[i];
+      var text = (btn.innerText || '').trim().toLowerCase();
+      if (text.indexOf(targetLabel) !== -1) {{
+        btn.click();
+        statusEl.textContent = '✅ ' + level + ' — saved!';
+        return;
+      }}
+    }}
+    statusEl.textContent = '⚠️ Button not found for ' + level + ' — use buttons above.';
+  }}
+}})();
+</script>
+"""
+    st.components.v1.html(voice_html, height=68)
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_inventory, tab_alerts, tab_events, tab_voice, tab_architecture = st.tabs([
+tab_inventory, tab_events, tab_voice = st.tabs([
     "📦 Inventory",
-    "🚨 Safety alerts",
     "🕒 Event log",
-    "🎙 Voice assistant",
-    "🏗 Architecture",
+    "🎙 Query system",
 ])
 
 # ── Tab: Inventory ────────────────────────────────────────────────────────────
@@ -761,55 +955,6 @@ with tab_inventory:
         else:
             st.info("No Sigma-Aldrich reference available for this item.")
 
-# ── Tab: Alerts ───────────────────────────────────────────────────────────────
-with tab_alerts:
-    section_header("🚨", "Safety and usage alerts", "Focus only on items that need attention.")
-
-    alerts = get_expiry_alerts(st.session_state.inventory, days_threshold=45)
-
-    checked_out_items = [
-        {"Name": item["name"], "Status": item["status"], "Location": item["location"], "Hazard": item["hazard"]}
-        for item in st.session_state.inventory.values()
-        if item["status"] == "Checked out"
-    ]
-
-    low_quantity_items = [
-        {"Name": item["name"], "Qty": item["quantity_level"], "Location": item["location"], "Hazard": item["hazard"]}
-        for item in st.session_state.inventory.values()
-        if item.get("quantity_level") == "LITTLE"
-    ]
-
-    if not alerts and not checked_out_items and not low_quantity_items:
-        st.success("No active alerts. Inventory is currently stable.")
-    else:
-        alert_col1, alert_col2 = st.columns(2, gap="large")
-
-        with alert_col1:
-            st.markdown("#### Checked-out substances")
-            if checked_out_items:
-                co_df = pd.DataFrame(checked_out_items)
-                st.dataframe(
-                    co_df.style.map(
-                        lambda val: "background-color: #fff0ed; color: #c0392b; font-weight: 800;" if val == "Checked out" else "",
-                        subset=["Status"],
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.success("No substances are currently checked out.")
-
-        with alert_col2:
-            st.markdown("#### Low quantity")
-            if low_quantity_items:
-                st.dataframe(pd.DataFrame(low_quantity_items), use_container_width=True, hide_index=True)
-            else:
-                st.success("No low-quantity items.")
-
-        if alerts:
-            st.markdown("#### Expiration alerts")
-            st.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
-
 # ── Tab: Event log ────────────────────────────────────────────────────────────
 with tab_events:
     section_header("🕒", "RFID event log", "Chronological history of check-out and return sessions.")
@@ -824,16 +969,17 @@ with tab_events:
         e1.metric("Recorded sessions", event_count)
         e2.metric("Still in use", active_sessions)
 
+        display_events_df = events_df.sort_values("_sort_time", ascending=False).drop(columns=["_sort_time"])
         st.dataframe(
-            events_df.sort_values("Taken At", ascending=False),
+            display_events_df,
             use_container_width=True,
             hide_index=True,
             height=460,
         )
 
-# ── Tab: Voice assistant ──────────────────────────────────────────────────────
+# ── Tab: Query system ─────────────────────────────────────────────────────────
 with tab_voice:
-    section_header("🎙", "Voice-style assistant", "Type a simple command as if it had been transcribed from speech.")
+    section_header("🎙", "Query system", "Type a simple command as if it had been transcribed from speech.")
 
     st.markdown(
         """
@@ -878,39 +1024,3 @@ with tab_voice:
 
         else:
             st.info("Command not recognised. Try: 'where is acetone', 'missing items', or 'expiring soon'.")
-
-# ── Tab: Architecture ─────────────────────────────────────────────────────────
-with tab_architecture:
-    section_header("🏗", "System architecture", "Same backend pipeline, redesigned user-facing layer.")
-
-    col_a, col_b = st.columns(2, gap="large")
-    with col_a:
-        st.markdown("#### Current demo")
-        st.markdown("""
-```text
-Simulated RFID buttons
-        ↓
-inventory_logic.py
-        ↓
-Streamlit dashboard
-```
-""")
-    with col_b:
-        st.markdown("#### Production path")
-        st.markdown("""
-```text
-RC522 RFID reader
-        ↓
-STM32 MCU sketch
-        ↓
-Arduino RPC bridge
-        ↓
-Python backend → SQLite DB
-        ↓
-Streamlit dashboard
-```
-""")
-
-    st.caption(
-        "The dashboard remains hardware-independent. The interface can keep the same user flow while simulated button events are replaced by real Arduino UNO Q RFID tag IDs."
-    )
