@@ -92,13 +92,18 @@ def get_last_session(rfid_tag_id: str) -> dict | None:
 
 # ── Quantity Updates ──────────────────────────────────────────────
 
-def update_substance_quantity(rfid_tag_id: str, quantity_level: str):
+def update_substance_quantity(rfid_tag_id: str, quantity_level: str, is_ai_prediction: bool = False):
     assert quantity_level in ("A LOT", "MEDIUM", "LITTLE", "UNKNOWN")
     with get_conn() as conn:
         conn.execute(
             "UPDATE substances SET quantity_level = ? WHERE rfid_tag_id = ?",
             (quantity_level, rfid_tag_id)
         )
+        if not is_ai_prediction and quantity_level != "UNKNOWN":
+            conn.execute(
+                "INSERT INTO feedback_logs (rfid_tag_id, quantity_level) VALUES (?, ?)",
+                (rfid_tag_id, quantity_level)
+            )
 
 # ── Alerts ────────────────────────────────────────────────────────
 
@@ -131,3 +136,14 @@ def get_and_clear_pending_scans() -> list[str]:
         ids = [str(r["id"]) for r in rows]
         conn.execute(f"DELETE FROM pending_scans WHERE id IN ({','.join(ids)})")
         return [r["tag_id"] for r in rows]
+
+# ── ML Feedback Tracker ───────────────────────────────────────────
+
+def get_feedback_count() -> int:
+    with get_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) as count FROM feedback_logs").fetchone()
+        return row["count"] if row else 0
+
+def clear_feedbacks():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM feedback_logs")

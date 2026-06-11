@@ -102,6 +102,17 @@ def create_and_populate():
         )
     """)
 
+    # --- FEEDBACK LOGS TABLE (For ML Training) ---
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS feedback_logs (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfid_tag_id         TEXT NOT NULL,
+            quantity_level      TEXT NOT NULL,
+            timestamp           TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (rfid_tag_id) REFERENCES substances(rfid_tag_id)
+        )
+    """)
+
     # --- PENDING_SCANS TABLE ---
     # Hardware scans queuing to bridge Arduino to Streamlit
     c.execute("""

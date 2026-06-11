@@ -17,9 +17,14 @@ from db_utils import (
     get_conn,
     update_substance_quantity,
     get_and_clear_pending_scans,
+    get_feedback_count,
+    clear_feedbacks,
 )
 
+import threading
 import time
+
+from ml_pipeline import predict_quantity, train_model
 
 from inventory_logic import (
     count_statuses,
@@ -408,10 +413,21 @@ def initialize_state():
         st.session_state.pending_feedback = None
 
 
+def check_and_trigger_training():
+    if get_feedback_count() >= 500:
+        st.toast("Training AI model in background...", icon="🧠")
+        # Start training in a background thread so we don't block the UI
+        def bg_train():
+            train_model()
+            clear_feedbacks() # Reset counter after successful training
+        
+        threading.Thread(target=bg_train, daemon=True).start()
+
 def handle_feedback(level: str, fb: dict):
     update_substance_quantity(fb["tag_id"], level)
     st.session_state.pending_feedback = None
     st.session_state.inventory = load_inventory_from_db()
+    check_and_trigger_training()
 
 
 def inventory_to_dataframe(inventory):
@@ -708,7 +724,12 @@ if st.session_state.get("pending_feedback"):
         handle_feedback("LITTLE", fb)
         st.rerun()
     if c4.button("Skip", use_container_width=True, key=f"fb_dismiss_{fb['session_id']}"):
+        # AI PREDICTION TRIGGER
+        st.toast("AI predicting quantity...", icon="🤖")
+        predicted_level = predict_quantity(fb["tag_id"])
+        update_substance_quantity(fb["tag_id"], predicted_level, is_ai_prediction=True)
         st.session_state.pending_feedback = None
+        st.session_state.inventory = load_inventory_from_db()
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
