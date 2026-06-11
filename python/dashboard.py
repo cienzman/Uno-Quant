@@ -16,13 +16,10 @@ from db_utils import (
     get_last_session,
     get_conn,
     update_substance_quantity,
-    get_and_clear_pending_scans
+    get_and_clear_pending_scans,
 )
 
-from streamlit_autorefresh import st_autorefresh
-import streamlit.components.v1 as components
-import voice_state
-
+import time
 
 from inventory_logic import (
     count_statuses,
@@ -33,7 +30,7 @@ from simulated_rfid import get_random_scan, get_named_tags
 
 
 st.set_page_config(
-    page_title="Smart Lab Inventory",
+    page_title="Uno Quant",
     page_icon="🧪",
     layout="wide",
 )
@@ -41,103 +38,304 @@ st.set_page_config(
 # ── Styling ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Import a clean, modern font */
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    :root {
+        --bg: #f4f7fb;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --primary: #123047;
+        --primary-soft: #e8f1f8;
+        --accent: #1f7a8c;
+        --text: #17212b;
+        --muted: #667085;
+        --border: #dce4ec;
+        --success: #0f8a5f;
+        --success-bg: #eaf8f1;
+        --warning: #b86e00;
+        --warning-bg: #fff6e5;
+        --danger: #c0392b;
+        --danger-bg: #fff0ed;
+        --info-bg: #eef6ff;
+    }
 
     html, body, [class*="css"] {
-        font-family: 'DM Sans', sans-serif;
-        font-size: 16px;
+        font-family: 'Inter', sans-serif;
     }
 
-    /* Bold and slightly larger all text */
-    p, div, span, label, td, th, li {
-        font-weight: 600 !important;
-        font-size: 15px !important;
-    }
-
-    /* Page background */
     .stApp {
-        background-color: #f5f7fa;
+        background:
+            radial-gradient(circle at top left, rgba(31, 122, 140, 0.10), transparent 30%),
+            linear-gradient(180deg, #f8fbfd 0%, var(--bg) 100%);
+        color: var(--text);
     }
 
-    /* Title block */
-    .lab-title {
-        font-size: 2.2rem;
+    .block-container {
+        padding-top: 3.8rem;
+        padding-bottom: 2.5rem;
+        max-width: 1440px;
+    }
+
+    h1, h2, h3, h4, h5, h6, p, div, span, label, td, th, li {
+        letter-spacing: -0.01em;
+    }
+
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0e263b 0%, #102f49 100%);
+        border-right: 1px solid rgba(255,255,255,0.10);
+    }
+
+    [data-testid="stSidebar"] * {
+        color: #eef6fb !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stSidebar"] .stCaptionContainer {
+        color: rgba(238, 246, 251, 0.76) !important;
+    }
+
+    [data-testid="stSidebar"] .stButton button {
+        width: 100%;
+        border-radius: 0.85rem;
+        background: rgba(255, 255, 255, 0.10);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        color: white !important;
+        font-weight: 700;
+        padding: 0.68rem 0.8rem;
+        transition: all 0.18s ease;
+    }
+
+    [data-testid="stSidebar"] .stButton button:hover {
+        background: rgba(255, 255, 255, 0.20);
+        border-color: rgba(255, 255, 255, 0.38);
+        transform: translateY(-1px);
+    }
+
+    .hero-card {
+        background: linear-gradient(135deg, #123047 0%, #1f7a8c 100%);
+        border-radius: 1.5rem;
+        padding: 1.45rem 1.65rem;
+        color: white;
+        box-shadow: 0 18px 45px rgba(15, 41, 66, 0.16);
+        margin-bottom: 1.1rem;
+    }
+
+    .hero-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.28rem 0.62rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.14);
+        border: 1px solid rgba(255,255,255,0.18);
+        font-size: 0.78rem;
+        font-weight: 700;
+        margin-bottom: 0.7rem;
+    }
+
+    .hero-title {
+        font-size: 2.35rem;
+        line-height: 1.05;
         font-weight: 800;
-        color: #0f2942;
-        letter-spacing: -0.5px;
-        margin-bottom: 0.1rem;
-    }
-    .lab-subtitle {
-        font-size: 0.95rem;
-        color: #6b7a8d;
-        font-weight: 500 !important;
-        margin-bottom: 1.2rem;
+        margin: 0;
     }
 
-    /* Metric cards */
-    [data-testid="stMetric"] {
-        background: white;
-        border-radius: 12px;
-        padding: 1rem 1.2rem;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    .hero-subtitle {
+        margin-top: 0.55rem;
+        margin-bottom: 0;
+        max-width: 820px;
+        color: rgba(255,255,255,0.82);
+        font-size: 1rem;
+        font-weight: 500;
     }
+
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+        margin: 0.15rem 0 0.85rem 0;
+    }
+
+    .section-icon {
+        width: 2.15rem;
+        height: 2.15rem;
+        border-radius: 0.8rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--primary-soft);
+        color: var(--primary);
+        font-size: 1.12rem;
+    }
+
+    .section-title {
+        font-size: 1.25rem;
+        line-height: 1.1;
+        font-weight: 800;
+        color: var(--primary);
+        margin: 0;
+    }
+
+    .section-caption {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin: 0.18rem 0 0 0;
+    }
+
+    .soft-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 1.15rem;
+        padding: 1.05rem 1.1rem;
+        box-shadow: 0 10px 30px rgba(15, 41, 66, 0.055);
+    }
+
+    .status-banner {
+        border-radius: 1.1rem;
+        padding: 1rem 1.1rem;
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin: 0.6rem 0 1rem 0;
+        box-shadow: 0 8px 24px rgba(15, 41, 66, 0.05);
+    }
+
+    .status-banner strong {
+        display: block;
+        color: var(--text);
+        font-size: 0.98rem;
+        margin-bottom: 0.15rem;
+    }
+
+    .status-banner span {
+        color: var(--muted);
+        font-size: 0.88rem;
+        font-weight: 500;
+    }
+
+    .banner-idle { background: var(--info-bg); }
+    .banner-success { background: var(--success-bg); }
+    .banner-danger { background: var(--danger-bg); }
+    .banner-warning { background: var(--warning-bg); }
+
+    .banner-emoji {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 0.9rem;
+        background: rgba(255,255,255,0.72);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.3rem;
+        flex-shrink: 0;
+    }
+
+    .quick-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 1.1rem;
+        padding: 1rem 1rem 0.95rem 1rem;
+        box-shadow: 0 10px 28px rgba(15, 41, 66, 0.05);
+        min-height: 6.35rem;
+    }
+
+    .quick-label {
+        color: var(--muted);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+    }
+
+    .quick-value {
+        color: var(--primary);
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1;
+        margin-bottom: 0.3rem;
+    }
+
+    .quick-note {
+        color: var(--muted);
+        font-size: 0.83rem;
+        font-weight: 500;
+    }
+
+    [data-testid="stMetric"] {
+        background: var(--surface);
+        border-radius: 1.1rem;
+        padding: 1rem 1.05rem;
+        border: 1px solid var(--border);
+        box-shadow: 0 10px 28px rgba(15, 41, 66, 0.05);
+    }
+
     [data-testid="stMetricLabel"] {
-        font-size: 0.8rem !important;
-        font-weight: 700 !important;
+        color: var(--muted) !important;
+        font-size: 0.78rem !important;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: #6b7a8d !important;
+        font-weight: 800 !important;
     }
+
     [data-testid="stMetricValue"] {
+        color: var(--primary) !important;
         font-size: 2rem !important;
         font-weight: 800 !important;
-        color: #0f2942 !important;
     }
 
-    /* Tabs */
     [data-testid="stTabs"] button {
-        font-weight: 700 !important;
-        font-size: 14px !important;
+        font-weight: 800 !important;
+        font-size: 0.92rem !important;
     }
 
-    /* Dataframe */
     [data-testid="stDataFrame"] {
-        border-radius: 10px;
+        border-radius: 1rem;
         overflow: hidden;
-        border: 1px solid #e2e8f0;
+        border: 1px solid var(--border);
+        box-shadow: 0 10px 30px rgba(15, 41, 66, 0.045);
     }
 
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background-color: #0f2942;
-    }
-    [data-testid="stSidebar"] * {
-        color: #e8edf3 !important;
-    }
-    [data-testid="stSidebar"] .stButton button {
-        background-color: #1a4070;
-        border: 1px solid #2a5a9f;
-        color: white !important;
-        border-radius: 8px;
-        font-weight: 700 !important;
-        transition: background 0.2s;
-    }
-    [data-testid="stSidebar"] .stButton button:hover {
-        background-color: #2a5a9f;
+    .stTextInput input, .stSelectbox div[data-baseweb="select"] > div {
+        border-radius: 0.9rem !important;
+        border-color: var(--border) !important;
     }
 
-    /* Buttons */
-    .stButton button {
-        border-radius: 8px;
-        font-weight: 700 !important;
+    .stButton button, .stLinkButton a {
+        border-radius: 0.85rem !important;
+        font-weight: 800 !important;
     }
 
-    /* Info/success/warning/error boxes */
     [data-testid="stAlert"] {
-        border-radius: 10px;
-        font-weight: 600 !important;
+        border-radius: 1rem;
+        border: 1px solid rgba(15, 41, 66, 0.08);
+    }
+
+    .tiny-help {
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+        margin-top: 0.2rem;
+    }
+
+    .command-chip {
+        display: inline-block;
+        padding: 0.34rem 0.58rem;
+        border-radius: 999px;
+        background: var(--surface-soft);
+        border: 1px solid var(--border);
+        color: var(--primary);
+        font-size: 0.82rem;
+        font-weight: 700;
+        margin: 0.15rem 0.2rem 0.15rem 0;
+    }
+
+    .divider-soft {
+        height: 1px;
+        background: var(--border);
+        margin: 1rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -148,13 +346,18 @@ st.markdown("""
 def format_last_event(raw: str) -> str:
     """Make last-event strings shorter and consistent."""
     import re
+    from datetime import datetime
     # e.g. "Returned at 2026-06-06 14:32:11" → "Returned · 06 Jun 14:32"
     for verb in ("Returned at", "Checked out at", "Registered at"):
         if raw.startswith(verb):
             rest = raw[len(verb):].strip()
             try:
-                from datetime import datetime
-                dt = datetime.strptime(rest, "%Y-%m-%d %H:%M:%S")
+                # Handle possible ISO format or microseconds
+                normalized = rest.replace("T", " ")
+                if "." in normalized:
+                    dt = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S.%f")
+                else:
+                    dt = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
                 short = dt.strftime("%d %b %H:%M")
                 action = verb.replace(" at", "").replace(" out", " out")
                 return f"{action} · {short}"
@@ -203,13 +406,11 @@ def initialize_state():
         st.session_state.open_url = None
     if "pending_feedback" not in st.session_state:
         st.session_state.pending_feedback = None
-        voice_state.clear()
 
 
 def handle_feedback(level: str, fb: dict):
     update_substance_quantity(fb["tag_id"], level)
     st.session_state.pending_feedback = None
-    voice_state.clear()
     st.session_state.inventory = load_inventory_from_db()
 
 
@@ -218,7 +419,7 @@ def inventory_to_dataframe(inventory):
     quantity_emojis = {
         "A LOT": "🟢 A LOT",
         "MEDIUM": "🟡 MEDIUM",
-        "LOW": "🔴 LOW",
+        "LITTLE": "🔴 LITTLE",
         "UNKNOWN": "⚪ UNKNOWN"
     }
     
@@ -231,7 +432,6 @@ def inventory_to_dataframe(inventory):
             "Location": item["location"],
             "Hazard": item["hazard"],
             "Qty": quantity_emojis.get(item.get('quantity_level', 'UNKNOWN'), "⚪ UNKNOWN"),
-            "Expiry": item["expiry_date"],
             "Last Event": item["last_event"],
         })
     return pd.DataFrame(rows)
@@ -291,7 +491,6 @@ def run_scan(tag_id: str):
                 "session_id": session_info["id"],
                 "item_name": name
             }
-            voice_state.set_pending_feedback(tag_id, name)
 
         st.session_state.last_event = {
             "event_type": "Check-in",
@@ -302,25 +501,114 @@ def run_scan(tag_id: str):
     st.session_state.inventory = load_inventory_from_db()
 
 
+def section_header(icon: str, title: str, caption: str = ""):
+    st.markdown(
+        f"""
+        <div class="section-header">
+            <div class="section-icon">{icon}</div>
+            <div>
+                <p class="section-title">{title}</p>
+                <p class="section-caption">{caption}</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def quick_card(label: str, value: int | str, note: str):
+    st.markdown(
+        f"""
+        <div class="quick-card">
+            <div class="quick-label">{label}</div>
+            <div class="quick-value">{value}</div>
+            <div class="quick-note">{note}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_last_event():
+    if not st.session_state.last_event:
+        st.markdown(
+            """
+            <div class="status-banner banner-idle">
+                <div style="display:flex; align-items:center; gap:0.85rem;">
+                    <div class="banner-emoji">📡</div>
+                    <div><strong>Ready for the next scan</strong><span>Waiting for an RFID event from the reader or simulator.</span></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    event = st.session_state.last_event
+    if event["event_type"] == "Unknown tag":
+        icon, klass, title = "⚠️", "banner-warning", "Unknown tag detected"
+    elif event["event_type"] == "Check-out":
+        icon, klass, title = "↗️", "banner-danger", "Substance checked out"
+    else:
+        icon, klass, title = "↘️", "banner-success", "Substance returned"
+
+    st.markdown(
+        f"""
+        <div class="status-banner {klass}">
+            <div style="display:flex; align-items:center; gap:0.85rem;">
+                <div class="banner-emoji">{icon}</div>
+                <div><strong>{title}</strong><span>{event['message']}</span></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def style_inventory_table(df: pd.DataFrame):
+    def highlight_status(val):
+        if val == "Checked out" or val == "IN USE":
+            return "background-color: #fff0ed; color: #c0392b; font-weight: 800;"
+        if val == "Present" or val == "ON SHELF":
+            return "background-color: #eaf8f1; color: #0f8a5f; font-weight: 800;"
+        return ""
+
+    def highlight_qty(val):
+        if "LITTLE" in str(val):
+            return "background-color: #fff0ed; color: #c0392b; font-weight: 800;"
+        if "MEDIUM" in str(val):
+            return "background-color: #fff6e5; color: #b86e00; font-weight: 800;"
+        if "A LOT" in str(val):
+            return "background-color: #eaf8f1; color: #0f8a5f; font-weight: 800;"
+        return "background-color: #f8fafc; color: #667085;"
+
+    styled = df.style.map(highlight_status, subset=["Status"])
+    styled = styled.map(highlight_qty, subset=["Qty"])
+    return styled
+
+
 # ── Boot ──────────────────────────────────────────────────────────────────────
 initialize_state()
 
 # Poll hardware RFID scans every 3 s
-st_autorefresh(interval=3000, key="rfid_polling")
-pending_tags = get_and_clear_pending_scans()
-if pending_tags:
-    for p_tag in pending_tags:
-        run_scan(p_tag)
-    st.rerun()
+@st.fragment(run_every=3)
+def poll_rfid():
+    pending_tags = get_and_clear_pending_scans()
+    if pending_tags:
+        for p_tag in pending_tags:
+            run_scan(p_tag)
+        st.rerun()
 
-# ── Header ────────────────────────────────────────────────────────────────────
-st.markdown('<p class="lab-title">🧪 Smart Laboratory Inventory</p>', unsafe_allow_html=True)
-st.markdown('<p class="lab-subtitle">RFID-based chemical inventory · real-time tracking · depletion forecast</p>', unsafe_allow_html=True)
+poll_rfid()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## Controls")
+    st.markdown("## 🧪 Smart Lab")
+    st.caption("RFID inventory control panel")
+    st.markdown("<div class='divider-soft'></div>", unsafe_allow_html=True)
+
     st.markdown("### Scan simulator")
+    st.caption("Use these buttons to simulate RFID scans during the demo.")
     named_tags = get_named_tags()
 
     for label, tag_id in named_tags.items():
@@ -328,145 +616,305 @@ with st.sidebar:
             run_scan(tag_id)
             st.rerun()
 
-    if st.button("⟳  Random RFID scan", use_container_width=True):
+    if st.button("🎲 Random RFID scan", use_container_width=True):
         run_scan(get_random_scan())
         st.rerun()
 
+    st.markdown("<div class='divider-soft'></div>", unsafe_allow_html=True)
+    st.markdown("### Maintenance")
 
+    with st.expander("System actions", expanded=False):
+        if st.button("↺ Reset inventory view", use_container_width=True):
+            st.session_state.inventory = load_inventory_from_db()
+            st.session_state.last_event = None
+            st.session_state.open_url = None
+            st.rerun()
 
-    st.markdown("### System")
-    if st.button("↺  Reset inventory", use_container_width=True):
-        st.session_state.inventory = load_inventory_from_db()
-        st.session_state.last_event = None
-        st.session_state.open_url = None
-        st.session_state.pending_feedback = None
-        voice_state.clear()
-        st.rerun()
+        if st.button("🗑 Clear event log", use_container_width=True):
+            with get_conn() as conn:
+                conn.execute("DELETE FROM sessions")
+            st.rerun()
 
-    if st.button("🗑  Clear events log", use_container_width=True):
-        with get_conn() as conn:
-            conn.execute("DELETE FROM sessions")
-        st.rerun()
+    st.caption("Demo mode: simulated scans can be replaced by RC522 events from Arduino UNO Q.")
 
-    st.divider()
-    st.caption("Simulated RFID — will be replaced by RC522 hardware events from Arduino UNO Q.")
+# ── Header ────────────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <div class="hero-card">
+        <h1 class="hero-title">🧪 Uno Quant</h1>
+        <p class="hero-subtitle">
+        Smart Laboratory Inventory.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 statuses = count_statuses(st.session_state.inventory)
 total_items = len(st.session_state.inventory)
+checked_out_count = statuses.get("Checked out", 0) + statuses.get("IN USE", 0)
+present_count = statuses.get("Present", 0) + statuses.get("ON SHELF", 0)
+missing_count = statuses.get("Missing", 0)
+low_stock_count = sum(
+    1 for item in st.session_state.inventory.values()
+    if item.get("quantity_level") == "LITTLE"
+)
+unknown_qty_count = sum(
+    1 for item in st.session_state.inventory.values()
+    if item.get("quantity_level") == "UNKNOWN"
+)
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total items", total_items)
-col2.metric("Present", statuses.get("Present", 0))
-col3.metric("Checked out", statuses.get("Checked out", 0))
-col4.metric("Missing", statuses.get("Missing", 0))
+m1, m2, m3, m4, m5 = st.columns(5)
+with m1:
+    quick_card("Total items", total_items, "Registered containers")
+with m2:
+    quick_card("On shelf", present_count, "Ready to use")
+with m3:
+    quick_card("In use", checked_out_count, "Currently checked out")
+with m4:
+    quick_card("Low quantity", low_stock_count, "Need attention")
+with m5:
+    quick_card("Unknown qty", unknown_qty_count, "Awaiting feedback")
 
-st.divider()
-
-# ── Last event banner ─────────────────────────────────────────────────────────
-if st.session_state.last_event:
-    event = st.session_state.last_event
-    if event["event_type"] == "Unknown tag":
-        st.warning(f"⚠️  {event['message']}")
-    elif event["event_type"] == "Check-out":
-        st.error(f"↑  {event['message']}")
-    else:
-        st.success(f"↓  {event['message']}")
-else:
-    st.info("Waiting for the first RFID scan.")
+render_last_event()
 
 # ── PubChem iframe ────────────────────────────────────────────────────────────
 if st.session_state.get("open_url"):
-    c_left, c_right = st.columns([0.9, 0.1])
+    st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    c_left, c_right = st.columns([0.86, 0.14])
     with c_left:
-        st.markdown("#### PubChem Reference")
+        section_header("🔬", "PubChem reference", "Opened automatically after check-out for faster safety lookup.")
     with c_right:
-        if st.button("✕ Close"):
+        if st.button("✕ Close", use_container_width=True):
             st.session_state.open_url = None
             st.rerun()
-    st.components.v1.iframe(st.session_state.open_url, height=500, scrolling=True)
+    st.components.v1.iframe(st.session_state.open_url, height=460, scrolling=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ── Micro-feedback ────────────────────────────────────────────────────────────
-vstate = voice_state.get_pending_feedback()
-if vstate.get("feedback_resolved"):
-    st.success(f"Voice recorded: {vstate['resolved_level']}")
-    st.session_state.pending_feedback = None
-    st.session_state.inventory = load_inventory_from_db()
-    voice_state.clear()
-    st.rerun()
-
 if st.session_state.get("pending_feedback"):
     fb = st.session_state.pending_feedback
-    st.markdown(f"#### 📋 Quick check — {fb['item_name']}")
-    st.info(f"How much **{fb['item_name']}** is left?")
+    st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    section_header("📋", f"Quick quantity check", f"How much {fb['item_name']} is left after this use?")
     c1, c2, c3, c4 = st.columns(4)
-    if c1.button("🟢 A LOT", use_container_width=True, key=f"fb_alot_{fb['session_id']}"):
+    if c1.button("🟢 A lot", use_container_width=True, key=f"fb_alot_{fb['session_id']}"):
         handle_feedback("A LOT", fb)
         st.rerun()
-    if c2.button("🟡 MEDIUM", use_container_width=True, key=f"fb_medium_{fb['session_id']}"):
+    if c2.button("🟡 Medium", use_container_width=True, key=f"fb_medium_{fb['session_id']}"):
         handle_feedback("MEDIUM", fb)
         st.rerun()
-    if c3.button("🔴 LOW", use_container_width=True, key=f"fb_little_{fb['session_id']}"):
-        handle_feedback("LOW", fb)
+    if c3.button("🔴 Little", use_container_width=True, key=f"fb_little_{fb['session_id']}"):
+        handle_feedback("LITTLE", fb)
         st.rerun()
     if c4.button("Skip", use_container_width=True, key=f"fb_dismiss_{fb['session_id']}"):
         st.session_state.pending_feedback = None
-        voice_state.clear()
         st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Browser-based TTS + STT via Web Speech API ────────────────────────────
+    # speechSynthesis speaks the prompt; webkitSpeechRecognition listens;
+    # the recognised answer clicks the matching Streamlit button as a fallback-safe action.
+    substance_name = fb["item_name"]
+    voice_html = f"""
+<div id="voice-status" style="
+    margin-top:10px; padding:10px 14px; border-radius:12px;
+    background:#eef6ff; color:#123047; font-family:Inter,sans-serif;
+    font-size:14px; font-weight:700; border:1px solid #dce4ec;">
+  🎙️ Starting voice prompt…
+</div>
+<script>
+(function() {{
+  var statusEl = document.getElementById('voice-status');
+
+  var prompt = "Quick check for {substance_name}. How much {substance_name} is left? Please say: a lot, medium, little, or skip.";
+  var utterance = new SpeechSynthesisUtterance(prompt);
+  utterance.rate = 0.95;
+  utterance.lang = 'en-US';
+
+  utterance.onstart = function() {{
+    statusEl.textContent = '🔊 Speaking…';
+  }};
+
+  utterance.onend = function() {{
+    statusEl.textContent = '🎙️ Listening… say: A LOT, MEDIUM, LITTLE or SKIP';
+    startListening();
+  }};
+
+  utterance.onerror = function(e) {{
+    statusEl.textContent = '⚠️ TTS error: ' + e.error + ' — use the buttons above.';
+  }};
+
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+
+  function startListening() {{
+    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {{
+      statusEl.textContent = '⚠️ Browser STT not supported — use the buttons above.';
+      return;
+    }}
+
+    var rec = new SpeechRecognition();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    rec.maxAlternatives = 5;
+
+    rec.onresult = function(event) {{
+      var heard = Array.from(event.results[0])
+                       .map(function(a) {{ return a.transcript.toLowerCase(); }})
+                       .join(' ');
+      statusEl.textContent = '✅ Heard: "' + heard + '"';
+
+      var level = classify(heard);
+      if (level) {{
+        statusEl.textContent = '✅ Classified as: ' + level + ' — saving…';
+        postAnswer(level);
+      }} else {{
+        statusEl.textContent = '❓ Not recognised ("' + heard + '") — use the buttons above.';
+      }}
+    }};
+
+    rec.onerror = function(e) {{
+      statusEl.textContent = '⚠️ STT error: ' + e.error + ' — use the buttons above.';
+    }};
+
+    rec.onend = function() {{
+      if (statusEl.textContent.startsWith('🎙️')) {{
+        statusEl.textContent = '⏱️ No speech detected — use the buttons above.';
+      }}
+    }};
+
+    rec.start();
+  }}
+
+  var MAP = [
+    ['a lot',        'A LOT'],
+    ['running out',  'LITTLE'],
+    ['almost empty', 'LITTLE'],
+    ['not much',     'LITTLE'],
+    ['plenty',       'A LOT'],
+    ['enough',       'A LOT'],
+    ['alot',         'A LOT'],
+    ['lots',         'A LOT'],
+    ['lot',          'A LOT'],
+    ['full',         'A LOT'],
+    ['much',         'A LOT'],
+    ['medium',       'MEDIUM'],
+    ['middle',       'MEDIUM'],
+    ['moderate',     'MEDIUM'],
+    ['half',         'MEDIUM'],
+    ['some',         'MEDIUM'],
+    ['little',       'LITTLE'],
+    ['nearly',       'LITTLE'],
+    ['almost',       'LITTLE'],
+    ['few',          'LITTLE'],
+    ['low',          'LITTLE'],
+    ['skip',         'SKIP'],
+    ['ignore',       'SKIP'],
+    ['later',        'SKIP'],
+    ['pass',         'SKIP'],
+    ['no',           'SKIP'],
+  ];
+
+  function classify(text) {{
+    for (var i = 0; i < MAP.length; i++) {{
+      if (text.indexOf(MAP[i][0]) !== -1) return MAP[i][1];
+    }}
+    return null;
+  }}
+
+  var LABEL_MAP = {{
+    'A LOT':  'a lot',
+    'MEDIUM': 'medium',
+    'LITTLE': 'little',
+    'SKIP':   'skip',
+  }};
+
+  function postAnswer(level) {{
+    var targetLabel = LABEL_MAP[level];
+    var buttons = window.parent.document.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {{
+      var btn = buttons[i];
+      var text = (btn.innerText || '').trim().toLowerCase();
+      if (text.indexOf(targetLabel) !== -1) {{
+        btn.click();
+        statusEl.textContent = '✅ ' + level + ' — saved!';
+        return;
+      }}
+    }}
+    statusEl.textContent = '⚠️ Button not found for ' + level + ' — use buttons above.';
+  }}
+}})();
+</script>
+"""
+    st.components.v1.html(voice_html, height=68)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_inventory, tab_alerts, tab_events, tab_voice, tab_architecture = st.tabs([
-    "Inventory",
-    "Safety alerts",
-    "Event log",
-    "Voice assistant",
-    "Architecture",
+tab_inventory, tab_alerts, tab_events, tab_voice = st.tabs([
+    "📦 Inventory",
+    "⚠️ Safety alerts",
+    "🕒 Event log",
+    "🎙 Query system",
 ])
 
 # ── Tab: Inventory ────────────────────────────────────────────────────────────
 with tab_inventory:
-    st.subheader("Chemical inventory")
+    left, right = st.columns([0.72, 0.28], gap="large")
 
-    query = st.text_input(
-        "Search",
-        placeholder="Filter by name, formula, location, hazard or tag ID…",
-    )
+    with left:
+        section_header("📦", "Chemical inventory", "Search, inspect status, and check current quantity levels.")
 
-    filtered_inventory = search_inventory(st.session_state.inventory, query)
-    df = inventory_to_dataframe(filtered_inventory)
+        query = st.text_input(
+            "Search inventory",
+            placeholder="Filter by name, formula, location, hazard or tag ID…",
+            label_visibility="collapsed",
+        )
 
-    def highlight_checked_out(val):
-        if val == "Checked out":
-            return "background-color: #fff0f0; color: #c0392b; font-weight: 700;"
-        return ""
+        filtered_inventory = search_inventory(st.session_state.inventory, query)
+        df = inventory_to_dataframe(filtered_inventory)
 
-    styled_df = df.style.map(highlight_checked_out, subset=["Status"])
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(style_inventory_table(df), use_container_width=True, hide_index=True, height=430)
 
-    st.markdown("#### Sigma-Aldrich reference")
-    selected_tag = st.selectbox(
-        "Select substance",
-        list(st.session_state.inventory.keys()),
-        format_func=lambda tag: st.session_state.inventory[tag]["name"],
-    )
+    with right:
+        section_header("🔗", "Reference lookup", "Open supplier information.")
 
-    item = st.session_state.inventory[selected_tag]
-    if item.get("sigmaaldrich_url"):
-        st.info("→  View the full product specification on Sigma-Aldrich.")
-        st.link_button("Open Sigma-Aldrich page ↗", item["sigmaaldrich_url"], use_container_width=True)
-    else:
-        st.caption("No Sigma-Aldrich reference available for this item.")
+        selected_tag = st.selectbox(
+            "Select substance",
+            list(st.session_state.inventory.keys()),
+            format_func=lambda tag: st.session_state.inventory[tag]["name"],
+        )
+
+        item = st.session_state.inventory[selected_tag]
+        st.markdown(
+            f"""
+            <div class="soft-card">
+                <div class="quick-label">Selected item</div>
+                <div style="font-size:1.15rem; font-weight:800; color:#123047; margin-bottom:0.35rem;">{item['name']}</div>
+                <div class="tiny-help"><strong>Formula:</strong> {item['chemical_formula']}</div>
+                <div class="tiny-help"><strong>Location:</strong> {item['location']}</div>
+                <div class="tiny-help"><strong>Hazard:</strong> {item['hazard']}</div>
+                <div class="tiny-help"><strong>Status:</strong> {item['status']}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if item.get("sigmaaldrich_url"):
+            st.link_button("Open Sigma-Aldrich page ↗", item["sigmaaldrich_url"], use_container_width=True)
+        else:
+            st.info("No Sigma-Aldrich reference available for this item.")
 
 # ── Tab: Alerts ───────────────────────────────────────────────────────────────
 with tab_alerts:
-    st.subheader("Safety & expiration alerts")
+    section_header("⚠️", "Safety & expiration alerts", "Monitor items expiring soon or currently out of the lab.")
 
     alerts = get_expiry_alerts(st.session_state.inventory, days_threshold=45)
 
     checked_out_items = [
         {"Name": item["name"], "Status": item["status"], "Location": item["location"], "Hazard": item["hazard"]}
         for item in st.session_state.inventory.values()
-        if item["status"] == "Checked out"
+        if item["status"] == "Checked out" or item["status"] == "IN USE"
     ]
 
     if not alerts and not checked_out_items:
@@ -479,33 +927,46 @@ with tab_alerts:
         if checked_out_items:
             st.markdown("##### Checked-out substances")
             co_df = pd.DataFrame(checked_out_items)
+            def highlight_checked_out_local(val):
+                if val == "Checked out" or val == "IN USE":
+                    return "background-color: #fff0ed; color: #c0392b; font-weight: 800;"
+                return ""
             st.dataframe(
-                co_df.style.map(highlight_checked_out, subset=["Status"]),
+                co_df.style.map(highlight_checked_out_local, subset=["Status"]),
                 use_container_width=True, hide_index=True,
             )
 
 # ── Tab: Event log ────────────────────────────────────────────────────────────
 with tab_events:
-    st.subheader("RFID event log")
+    section_header("🕒", "RFID event log", "Chronological history of check-out and return sessions.")
     events_df = load_events()
 
     if events_df.empty:
-        st.info("No events recorded yet.")
+        st.info("No events recorded yet. Scan a substance to populate this log.")
     else:
         st.dataframe(
             events_df.sort_values("Taken At", ascending=False),
             use_container_width=True,
             hide_index=True,
+            height=460,
         )
 
 # ── Tab: Voice assistant ──────────────────────────────────────────────────────
 with tab_voice:
-    st.subheader("Voice assistant")
-    st.caption("Type a command as if it had been transcribed from speech.")
+    section_header("🎙", "Query system", "Type a simple command")
+
+    st.markdown(
+        """
+        <span class="command-chip">where is acetone</span>
+        <span class="command-chip">missing items</span>
+        <span class="command-chip">expiring soon</span>
+        """,
+        unsafe_allow_html=True,
+    )
 
     command = st.text_input(
         "Command",
-        placeholder="e.g. where is acetone · missing items · expiring soon",
+        placeholder="Try: where is acetone · missing items · expiring soon",
     )
 
     if command:
@@ -521,7 +982,7 @@ with tab_voice:
                 st.warning("No matching substance found.")
 
         elif "missing" in cmd or "checked out" in cmd:
-            missing = [i["name"] for i in st.session_state.inventory.values() if i["status"] == "Checked out"]
+            missing = [i["name"] for i in st.session_state.inventory.values() if i["status"] == "Checked out" or i["status"] == "IN USE"]
             if missing:
                 st.warning("Currently checked out: " + ", ".join(missing))
             else:
@@ -537,198 +998,3 @@ with tab_voice:
 
         else:
             st.info("Command not recognised. Try: 'where is acetone', 'missing items', or 'expiring soon'.")
-
-# ── Tab: Architecture ─────────────────────────────────────────────────────────
-with tab_architecture:
-    st.subheader("System architecture")
-
-    st.markdown("""
-```
-Current demo (simulated RFID)
-──────────────────────────────
-Sidebar buttons
-      ↓
-inventory_logic.py
-      ↓
-Streamlit dashboard
-
-Production (Arduino UNO Q)
-──────────────────────────────
-RC522 RFID reader
-      ↓
-STM32 MCU (sketch.ino)
-      ↓
-Bridge (Arduino RPC)
-      ↓
-Python backend (main.py)  →  SQLite DB
-      ↓
-Streamlit dashboard
-      ↓
-Browser (any device on Wi-Fi)
-```
-""")
-
-    st.caption(
-        "The dashboard is hardware-independent. "
-        "Replace the simulated button events with real RFID tag IDs from Arduino UNO Q."
-    )
-
-# ── Voice Widget ──────────────────────────────────────────────────────────────
-VOICE_WIDGET_HTML = """
-<div id="voice-widget" style="position:fixed;bottom:24px;right:24px;z-index:9999">
-  <button id="micBtn" onclick="toggleVoice()"
-    style="width:56px;height:56px;border-radius:50%;border:none;
-           background:#E53E3E;color:white;font-size:24px;cursor:pointer">
-    🎙
-  </button>
-  <div id="voiceStatus" style="text-align:center;font-size:11px;color:#666;margin-top:4px">
-    Off
-  </div>
-</div>
-<script>
-// ── State ──────────────────────────────────────────────────────
-let ws = null, audioCtx = null, workletNode = null, isActive = false, isStarting = false;
-
-let isHttps = location.protocol === "https:";
-try {
-  if (window.parent && window.parent.location.protocol === "https:") {
-    isHttps = true;
-  }
-} catch(e) {}
-const protocol = isHttps ? "wss://" : "ws://";
-
-let host = "";
-try { host = window.parent.location.hostname; } catch(e) {}
-if (!host) { host = window.location.hostname; }
-if (!host) { host = "localhost"; }
-
-const WS_URL = protocol + host + ":8502/ws/voice";
-const STATE_URL = (isHttps ? "https://" : "http://") + host + ":8502/state";
-
-// ── Audio playback queue ──────────────────────────────────────
-const audioQueue = [];
-let isPlaying = false;
-
-// ── Auto-start Polling ────────────────────────────────────────
-setInterval(async () => {
-    try {
-        const res = await fetch(STATE_URL);
-        const state = await res.json();
-        
-        // Auto-start if there's pending feedback and we aren't active
-        if (state.pending_tag_id && !state.feedback_resolved && !isActive) {
-            console.log("Auto-starting voice for pending feedback:", state.pending_item_name);
-            await startVoice();
-        }
-        
-        // Auto-stop if feedback is resolved or cleared, and we are active
-        if ((!state.pending_tag_id || state.feedback_resolved) && isActive) {
-            console.log("Auto-stopping voice as feedback is resolved or cleared");
-            stopVoice();
-        }
-    } catch(e) {}
-}, 2000);
-
-async function playNext() {
-  if (isPlaying || audioQueue.length === 0) return;
-  isPlaying = true;
-  const pcm = audioQueue.shift();
-  const samples = new Int16Array(pcm);
-  const float32 = new Float32Array(samples.length);
-  for (let i = 0; i < samples.length; i++)
-    float32[i] = samples[i] / 32768.0;
-  const buf = audioCtx.createBuffer(1, float32.length, 24000);
-  buf.getChannelData(0).set(float32);
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  src.onended = () => { isPlaying = false; playNext(); };
-  src.start();
-}
-
-// ── Toggle ─────────────────────────────────────────────────────
-async function toggleVoice() {
-  isActive ? stopVoice() : await startVoice();
-}
-
-async function startVoice() {
-  if (isActive || isStarting) return;
-  isStarting = true;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    alert("Microphone access is not supported. Ensure you are accessing the dashboard via HTTPS.");
-    isStarting = false;
-    return;
-  }
-  try {
-    audioCtx = new AudioContext({ sampleRate: 16000 });
-    
-    const workletCode = `
-      class PCMProcessor extends AudioWorkletProcessor {
-          process(inputs, outputs, parameters) {
-              const input = inputs[0];
-              if (input.length > 0) {
-                  const channelData = input[0];
-                  const pcm16 = new Int16Array(channelData.length);
-                  for (let i = 0; i < channelData.length; i++) {
-                      let s = Math.max(-1, Math.min(1, channelData[i]));
-                      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                  }
-                  this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
-              }
-              return true;
-          }
-      }
-      registerProcessor('pcm-processor', PCMProcessor);
-    `;
-    const b64 = btoa(workletCode);
-    const dataUri = 'data:application/javascript;base64,' + b64;
-    
-    await audioCtx.audioWorklet.addModule(dataUri);
-    if (!audioCtx) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    if (!audioCtx) return;
-    const source = audioCtx.createMediaStreamSource(stream);
-    workletNode = new AudioWorkletNode(audioCtx, "pcm-processor");
-    source.connect(workletNode);
-
-    ws = new WebSocket(WS_URL);
-    ws.binaryType = "arraybuffer";
-    ws.onopen = () => { isActive = true; isStarting = false; updateUI(true); };
-    ws.onerror = (e) => {
-        isStarting = false;
-        alert("WebSocket connection failed. If you are using HTTPS with a self-signed certificate, your browser is blocking the Voice Assistant on port 8502. \\n\\nPlease open https://" + host + ":8502 in a new tab, accept the security warning ('Advanced' -> 'Proceed'), and then return here to try again.");
-    };
-    ws.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) {
-        audioQueue.push(e.data);
-        playNext();
-      }
-    };
-    ws.onclose = () => stopVoice();
-
-    workletNode.port.onmessage = (e) => {
-      if (ws && ws.readyState === 1) ws.send(e.data);
-    };
-  } catch (err) {
-    isStarting = false;
-    console.error(err);
-    alert("Error starting voice: " + err.message);
-    stopVoice();
-  }
-}
-
-function stopVoice() {
-  ws && ws.close();
-  if (audioCtx) { audioCtx.close(); }
-  ws = null; audioCtx = null; isActive = false; isStarting = false;
-  updateUI(false);
-}
-
-function updateUI(on) {
-  document.getElementById("micBtn").style.background = on ? "#38A169" : "#E53E3E";
-  document.getElementById("voiceStatus").textContent = on ? "Listening" : "Off";
-}
-</script>
-"""
-
-components.html(VOICE_WIDGET_HTML, height=100)

@@ -1,7 +1,11 @@
+# Smart Lab Inventory — Python dependencies
 streamlit
 pandas
-streamlit-autorefresh
-fastapi
-uvicorn
-google-genai
-python-dotenv
+requests
+ 
+# ── Voice assistant ───────────────────────────────────────────────────────────
+SpeechRecognition
+ 
+# System packages — install once on Arduino UNO Q (Debian):
+#   sudo apt install espeak portaudio19-dev python3-pyaudio
+# pyttsx3 and pyaudio are NOT pip-installed; espeak is called via subprocess.
