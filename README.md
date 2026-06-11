@@ -1,6 +1,6 @@
-# 🧪 Intelligent Environment: Smart Laboratory Inventory
+# 🧪 Uno Quant: Smart Laboratory Inventory
 
-Welcome to the **Smart Laboratory Inventory** project! This system is designed for chemistry laboratories, research centers, and pharmacies to autonomously track the residual quantity of chemical substances, preventing unseen stockouts and manual tracking errors.
+Welcome to the **Uno Quant**! This system is designed for chemistry laboratories, research centers, and pharmacies to autonomously track the residual quantity of chemical substances, preventing unseen stockouts and manual tracking errors.
 
 This project uses an **RFID-driven workflow** backed by a **self-learning probabilistic machine learning model** and an interactive, highly visual Streamlit dashboard.
 
