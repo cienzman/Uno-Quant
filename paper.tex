@@ -1,0 +1,95 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage[colorlinks=true, urlcolor=blue, linkcolor=blue, citecolor=blue]{hyperref}
+\title{Uno Quant: Ambient Intelligence for Smart Laboratory Inventory.\\ Edge-AI Driven Residual Quantity Tracking via Non-Invasive RFID on Arduino UNO Q}
+
+\author{
+Vincenzo Del Grosso\\
+Computer Science and Engineering\\
+Politecnico di Milano\\
+{\tt\small vincenzo.delgrosso@mail.polimi.it}
+\and
+Beatrice Tenti\\
+High Performance Computing Engineering\\
+Politecnico di Milano\\
+{\tt\small beatrice1.tenti@mail.polimi.it}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Managing chemical inventory in research laboratories and pharmacies is a notoriously inefficient process, historically reliant on manual tracking which leads to outdated information and unforeseen stockouts. In this paper, we present a novel ambient intelligence system designed to autonomously track the residual quantity of chemical substances at a single-item level. Conceived from extensive interviews with the \href{https://scienzedelfarmaco.dip.unipv.it/en}{Pharmaceutical Laboratories at Università di Pavia}, our solution eliminates the need for invasive sensors such as cameras or load cells. Instead, we employ a non-invasive RFID-based architecture running entirely on the new edge-computing platform, \href{https://www.arduino.cc/product-uno-q}{Arduino UNO Q}. By extracting temporal usage patterns and cross-substance dependencies, our embedded AI model predicts residual quantities. Furthermore, we introduce an ephemeral voice-based micro-feedback loop designed to collect labeled data for continuous model fine-tuning without keeping the user permanently in the loop. Our work demonstrates a scalable, end-to-end edge AI pipeline bridging the gap between hardware constraints and seamless human-computer interaction in laboratory environments.
+\end{abstract}
+
+\section{Introduction}
+
+In modern chemistry laboratories, pharmacy labs, and research centers, real-time knowledge of the residual quantity of substances (e.g., chloride, powdered reagents) is paramount. Unnoticed stockouts halt critical experiments and disrupt supply chains. Despite technological advancements, many laboratories still rely on manual data entry via paper sheets or Excel spreadsheets. Interviews conducted with students and professors at the Pharmaceutical Laboratory of Università di Pavia revealed a systemic issue: manual inventory tracking results in missing data, outdated information, and an inability to track the physical location or residual availability of shared substances across distributed lab spaces. 
+
+To address these limitations, we propose an intelligent, frictionless smart inventory system. Unlike traditional smart shelves that depend on complex, costly, and invasive hardware—such as load cells requiring constant tare calibration, or computer vision systems that raise privacy concerns, suffer from occlusion, and fail when encountering the opaque or amber containers typical of chemical reagents—our architecture relies exclusively on time-series usage data collected via RFID technology. While inspired by the operational fluidity and user intuition of modern RFID-driven retail systems (such as \href{https://www.decathlonrfidservices.com/decathlon-rain-rfid-project}{Decathlon's self-checkout paradigm}), our approach diverges fundamentally in its objective. Rather than executing a standard binary item count, our system performs continuous, single-item level residual quantity predictions (e.g., forecasting when a specific container of sodium chloride is near depletion), bridging the gap between passive telemetry and predictive ambient intelligence. 
+
+\begin{table}[htbp]
+\centering
+\caption{State-of-the-art comparison between existing solutions and our proposed prototype.}
+\label{tab:state_of_the_art}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lccc}
+\toprule
+\textbf{Features / Metrics} & \textbf{Berkeley Lab} \cite{berkeleylab} & \textbf{UC Davis} \cite{ucdavis} & \textbf{Our Prototype} \\ \midrule
+RFID identification         & \checkmark            & \checkmark        & \checkmark             \\
+No scale required           & \checkmark            & \checkmark        & \checkmark             \\
+Residual quantity tracking  & ---                     & ---                 & \checkmark             \\
+ML usage prediction         & ---                     & ---                 & \checkmark             \\
+Voice interface             & ---                     & ---                 & \checkmark             \\ \bottomrule
+\end{tabular}
+}
+\end{table}
+
+As shown in Table \ref{tab:state_of_the_art}, existing solutions focus heavily on location tracking rather than intelligent quantity prediction. Our system aims to bridge this gap.
+
+\section{System Architecture}
+
+Our end-to-end system runs entirely on the \textbf{Arduino UNO Q}, Arduino's new Linux-capable board featuring a quad-core Qualcomm\textsuperscript{\textregistered} Dragonwing™ QRB2210 processor for edge AI and an STM32U585 microcontroller for real-time sensor control. The architecture is composed of four integrated layers.
+
+\subsection{Hardware and Data Layer}
+The system uses an MFRC522 RFID reader managed by the STM32 microcontroller. The data collected from an event is strictly limited to: \texttt{tag\_id}, \texttt{substance\_name}, \texttt{timestamp}, \texttt{event\_type} (Taken or Returned), and \texttt{duration\_minutes}. A bi-directional bridge (\textit{Arduino App Lab}) routes these events in real-time to the Debian OS subsystem.
+
+\subsection{Intelligence Layer}
+The core innovation lies in predicting the residual quantity of a substance based purely on its usage time patterns and cross-usage patterns with other chemicals. We formulate this as a time-series prediction task suitable for Recurrent Neural Networks (RNNs) \cite{hochreiter1997long, cho2014learning}. However, it must be emphasized that we are only at the beginning of this research. Currently, the system utilizes basic temporal tracking, but, in addition to comparisons with simpler systems such as Gradient Boosting, more advanced sequence models such as Gated Recurrent Units (GRUs) and transformer-based architectures must be thoroughly evaluated to capture intricate temporal dependencies and irregular demand intervals \cite{wang2019deep}.
+
+To gather ground-truth data for this evolving AI model without frustrating the chemist, we implemented a Voice Micro-Feedback mechanism. Upon returning an item, the user can optionally answer a brief voice prompt (e.g., "How much Cholesterol is left?") with "A LOT", "MEDIUM", "LITTLE", or "SKIP". This acts solely as a labeling trick to generate high-quality training sequences. Once sufficient data is collected, the model infers residual quantities automatically when the user skips the feedback.
+
+\subsection{Backend and Frontend}
+A Python-based backend handles the SQLite database operations, mapping RFID tags to specific chemical states. To enrich the data, the backend integrates deeply with the \textbf{PubChem} (\url{https://pubchem.ncbi.nlm.nih.gov/}) and \textbf{Sigma Aldrich} (\url{https://www.sigmaaldrich.com/}) databases, pulling molecular hazard profiles and reordering parameters dynamically. The frontend is a dynamically updated Streamlit dashboard served locally from the Arduino board.
+
+\section{Future Work and Conclusion}
+
+We introduced an innovative smart laboratory inventory system that operates entirely on edge hardware. By abstracting away invasive sensors and laying the groundwork for AI to interpret simple temporal usage data, we created a seamless workflow. Future development will scale across three axes: \textbf{Hardware Scaling} (UHF RFID antennas for passive tracking), \textbf{Model Scaling} (optimizing GRU/LSTM pipelines on larger datasets), and \textbf{Customer Base Scaling}. This approach solves the critical pain points identified by the Università di Pavia and sets a new standard for ambient intelligence.
+
+\begin{thebibliography}{5}
+
+\bibitem{berkeleylab}
+Berkeley Lab EHS, ``\href{https://ehs.lbl.gov/service/chemical-lab-safety/rfid-chemical-inventory-tracking/}{Chemical Management System (CMS) and RFID Tracking},'' 2026.
+
+\bibitem{ucdavis}
+UC Davis Safety Services, ``\href{https://www.healthcareitnews.com/news/future-medication-management-and-digital-visibility-uc-davis-health-using-rfid}{ChemTag RFID Inventory Program},'' 2026.
+
+\bibitem{hochreiter1997long}
+S. Hochreiter and J. Schmidhuber, ``Long short-term memory,'' \textit{\href{https://www.researchgate.net/publication/13853244_Long_Short-Term_Memory}{Neural Comput.}}, vol. 9, no. 8, pp. 1735--1780, 1997.
+
+\bibitem{cho2014learning}
+K. Cho et al., ``Learning phrase representations using RNN encoder-decoder for statistical machine translation,'' in \textit{\href{https://arxiv.org/abs/1406.1078}{Proc. EMNLP}}, 2014, pp. 1724--1734.
+
+\bibitem{wang2019deep}
+J. Wang, Y. Chen, S. Hao, X. Peng, and L. Hu, ``Deep learning for sensor-based activity recognition: A survey,'' \textit{\href{https://arxiv.org/abs/1707.03502}{Pattern Recognit. Lett.}}, vol. 119, pp. 3--11, 2019.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,9 +1,17 @@
 """
-test_voice.py — run this directly on the UNO Q to diagnose TTS and STT.
+test_voice.py
 
+A standalone diagnostic utility script to test the Text-to-Speech (TTS) and 
+Speech-to-Text (STT) hardware pipeline on the Arduino UNO Q platform.
+
+Usage:
     python3 test_voice.py
 
-It tests each component in isolation and prints exactly what fails.
+This script systematically tests:
+1. espeak (TTS binary)
+2. aplay (Audio output devices)
+3. arecord (Audio input devices / microphones)
+4. SpeechRecognition (End-to-end STT via Google API)
 """
 
 import subprocess
@@ -12,6 +20,8 @@ import sys
 # ── 1. Test espeak ────────────────────────────────────────────────────────────
 print("\n[1/4] Testing espeak TTS...")
 try:
+    # Execute the espeak binary to synthesize speech. 
+    # The '-s 140' flag controls the reading speed.
     result = subprocess.run(
         ["espeak", "-s", "140", "-v", "en", "Hello. Espeak is working."],
         capture_output=True, text=True
@@ -27,6 +37,7 @@ except FileNotFoundError:
 # ── 2. List audio output devices ─────────────────────────────────────────────
 print("\n[2/4] Listing audio output devices (aplay)...")
 try:
+    # Query ALSA for recognized playback hardware devices.
     result = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
     print(result.stdout or "(no output devices found)")
 except FileNotFoundError:
@@ -35,6 +46,7 @@ except FileNotFoundError:
 # ── 3. List audio input devices ───────────────────────────────────────────────
 print("\n[3/4] Listing audio input (microphone) devices (arecord)...")
 try:
+    # Query ALSA for recognized recording hardware devices.
     result = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
     print(result.stdout or "(no input devices found)")
     if "no soundcards found" in result.stdout.lower() or not result.stdout.strip():
@@ -49,10 +61,13 @@ try:
     r = sr.Recognizer()
     with sr.Microphone() as source:
         print("      Adjusting for ambient noise...")
+        # Calibrate the energy threshold dynamically based on environmental noise
         r.adjust_for_ambient_noise(source, duration=1)
         print("      >>> SPEAK NOW (you have 5 seconds) <<<")
+        # Listen indefinitely until a phrase is finished, timing out if silence persists
         audio = r.listen(source, timeout=5, phrase_time_limit=5)
     print("      Audio captured. Sending to Google STT...")
+    # Attempt to decode the captured audio buffer using Google's public Web Speech API
     text = r.recognize_google(audio)
     print(f"      ✓ Recognised: '{text}'")
 except ImportError:

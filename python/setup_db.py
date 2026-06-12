@@ -5,14 +5,22 @@ import os
 import requests
 from urllib.parse import quote
 
+# Absolute path resolution for the SQLite database file
 DB_PATH = os.path.join(os.path.dirname(__file__), "db", "inventory.db")
 
 
-def fetch_pubchem_data(substance_name: str):
+def fetch_pubchem_data(substance_name: str) -> dict | None:
     """
-    Given a substance name, fetches its chemical formula and PubChem link.
-    """
+    Query the official PubChem API to retrieve the chemical formula and URL for a given substance.
 
+    Args:
+        substance_name (str): The common name or query string of the chemical substance.
+
+    Returns:
+        dict | None: A dictionary containing the substance name, CID, chemical formula, 
+                     and PubChem URL. Returns None if the network request fails, or if 
+                     no valid data is returned by the API.
+    """
     encoded_name = quote(substance_name)
 
     url = (
@@ -52,12 +60,19 @@ def fetch_pubchem_data(substance_name: str):
 
 
 def create_and_populate():
+    """
+    Initialize the SQLite database schema and seed it with a predefined set of demo substances.
+    
+    This function handles the creation of the database directory, construction of essential 
+    tables (substances, sessions, alerts, feedback_logs, pending_scans), and performs automatic 
+    PubChem metadata enrichment for the seeded data.
+    """
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # --- SUBSTANCES TABLE ---
-    # Master registry: one row per physical container
+    # ── SUBSTANCES TABLE ──────────────────────────────────────────────────────────
+    # Master registry tracking physical chemical containers and their metadata.
     c.execute("""
         CREATE TABLE IF NOT EXISTS substances (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,8 +91,8 @@ def create_and_populate():
         )
     """)
 
-    # --- SESSIONS TABLE ---
-    # One row per TAKEN→RETURNED cycle
+    # ── SESSIONS TABLE ────────────────────────────────────────────────────────────
+    # Logs individual usage sessions, defining duration between TAKEN and RETURNED events.
     c.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,7 +104,8 @@ def create_and_populate():
         )
     """)
 
-    # --- ALERTS TABLE ---
+    # ── ALERTS TABLE ──────────────────────────────────────────────────────────────
+    # Stores actionable notifications for the user interface.
     c.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +118,8 @@ def create_and_populate():
         )
     """)
 
-    # --- FEEDBACK LOGS TABLE (For ML Training) ---
+    # ── FEEDBACK LOGS TABLE ───────────────────────────────────────────────────────
+    # Dedicated table to collect labeled ground-truth quantity data for ML training.
     c.execute("""
         CREATE TABLE IF NOT EXISTS feedback_logs (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,8 +130,8 @@ def create_and_populate():
         )
     """)
 
-    # --- PENDING_SCANS TABLE ---
-    # Hardware scans queuing to bridge Arduino to Streamlit
+    # ── PENDING_SCANS TABLE ───────────────────────────────────────────────────────
+    # A queue table bridging hardware RFID interrupts with the Streamlit frontend.
     c.execute("""
         CREATE TABLE IF NOT EXISTS pending_scans (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,9 +142,8 @@ def create_and_populate():
 
     conn.commit()
 
-    # --- POPULATE DEMO SUBSTANCES ---
-    # Qui restano manuali solo i dati fisici/locali del laboratorio.
-    # Formula chimica e PubChem URL vengono recuperati automaticamente da PubChem.
+    # ── DEMO SUBSTANCES SEED DATA ─────────────────────────────────────────────────
+    # Define physical constraints manually, but rely on PubChem for exact chemical attributes.
 
     demo_substances_input = [
         {
@@ -184,12 +200,12 @@ def create_and_populate():
 
     demo_substances = []
 
+    # Execute dynamic PubChem enrichment pipeline for seed data
     for item in demo_substances_input:
         pubchem_data = fetch_pubchem_data(item["pubchem_query"])
 
         if pubchem_data is None:
             print(f"Using fallback values for '{item['display_name']}'")
-
             chemical_formula = "N/A"
             pubchem_url = ""
         else:
@@ -208,6 +224,7 @@ def create_and_populate():
             item["primary_hazard"]
         ))
 
+    # Safely batch-insert ignoring predefined existing constraints
     c.executemany("""
         INSERT OR IGNORE INTO substances
             (rfid_tag_id, substance_name, chemical_formula, pubchem_url, sigmaaldrich_url, initial_quantity, unit, location, primary_hazard)
@@ -234,7 +251,11 @@ if __name__ == "__main__":
     create_and_populate()
 
 def reset_db():
-    """Delete and fully recreate the database from scratch."""
+    """
+    Perform a complete tear-down and rebuild of the SQLite database.
+    
+    Warning: This action permanently deletes all tracked sessions, logs, and state.
+    """
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
         print(f"Deleted existing database at: {DB_PATH}")

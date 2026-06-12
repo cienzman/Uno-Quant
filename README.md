@@ -1,109 +1,97 @@
 # 🧪 Uno Quant: Smart Laboratory Inventory
 
-Welcome to the **Uno Quant**! This system is designed for chemistry laboratories, research centers, and pharmacies to autonomously track the residual quantity of chemical substances, preventing unseen stockouts and manual tracking errors.
+> **A cutting-edge, edge-computing research project carried out at [Necst Lab](https://necst.it/) in collaboration with the Arduino Team of Qualcomm.**
+> 
+> *The outcomes of this innovative project were proudly presented to Arduino CEO [Fabio Violante](https://www.linkedin.com/in/fabioviolante/).*
 
-This project uses an **RFID-driven workflow** backed by a **self-learning probabilistic machine learning model** and an interactive, highly visual Streamlit dashboard.
+[![Arduino UNO Q](https://img.shields.io/badge/Hardware-Arduino_UNO_Q-00979D?style=for-the-badge&logo=arduino&logoColor=white)](https://arduino.cc)
+[![Python](https://img.shields.io/badge/Backend-Python_3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Streamlit](https://img.shields.io/badge/Frontend-Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io)
 
----
+## 🌟 Overview
 
-## 🏗️ Architecture & Pipeline
+Welcome to **Uno Quant: Ambient Intelligence for Smart Laboratory Inventory**! This system revolutionizes how chemistry laboratories, research centers, and pharmacies track residual quantities of chemical substances. 
 
-The system is designed to keep the user out of the loop as much as possible while maintaining highly accurate substance quantity estimates.
+Born out of interviews with the Pharmaceutical Lab at Università di Pavia, this project solves a critical problem: manual inventory tracking (paper/Excel) leads to outdated information, missing data, and dangerous stockouts. Our solution keeps the user out of the loop as much as possible, using an **RFID-driven workflow**, **Edge AI**, and an intuitive dashboard—all running seamlessly on the new **Arduino UNO Q**.
 
-### 1. Hardware & Event Triggering
-- **Current Prototype:** Uses simulated RFID scans triggered by buttons on the dashboard.
-- **Future Integration:** An **Arduino UNO Q** paired with an RFID sensor. When a user takes a substance from the shelf, they scan the RFID tag, which sends an "IN_USE" event to the backend. Upon returning the item, they scan it again, triggering an "ON_SHELF" event and closing the session.
-
-### 2. The Predictive Model (4 Phases)
-Instead of relying on clunky scales or manual data entry, the system learns consumption patterns over time using a sophisticated Bayesian model:
-
-* **Phase 0 (Duration Scaling):** When a session closes, the system calculates how long the substance was checked out. It scales the baseline consumption rate by comparing this session's duration to the historical average duration for that specific substance.
-* **Phase 1 (Bayesian Updates):** The consumption rate isn't fixed; it's treated as a Gaussian distribution. After every session, the model performs a Bayesian Update, refining its belief about the `rate_per_usage` (mean) and its uncertainty (`rate_variance`) based on the newly observed duration.
-* **Phase 2 (Micro-feedback Calibration):** To keep the model grounded without forcing users to weigh bottles, a quick, dismissible UI prompt appears when an item is returned: *"Is this substance enough for at least one more experiment?"*. Clicking YES or NO applies a directional correction factor, pulling the estimate up or pushing it down.
-* **Phase 3 (Probabilistic Forecasting):** Using the learned variance and the average daily sessions, the dashboard generates three distinct depletion curves: **Optimistic (slow depletion)**, **Expected**, and **Pessimistic (fast depletion)**, plotting exactly when the lab might run out.
-
-### 3. The Dashboard
-The interactive Streamlit dashboard acts as the central hub:
-- **Real-time Metrics:** View total items, present items, and checked-out items (with custom flashing visual alerts).
-- **Sigma-Aldrich Integration:** Selecting an item dynamically loads its exact product page from Sigma-Aldrich directly inside the dashboard.
-- **Alerts & Events:** Track expiration dates, low-stock warnings, and view a complete history of every check-out/check-in event.
+### 🚀 Why This Matters
+* **End-to-End Edge Architecture:** The entire stack (Data Layer, AI Layer, Backend, and Frontend) runs locally on the **Arduino UNO Q**—leveraging its Qualcomm® Dragonwing™ QRB2210 processor and STM32U585 microcontroller.
+* **Non-Invasive AI:** No cameras. No load cells. The system uses advanced modeling on usage patterns (duration, cross-substance usage) to predict residual quantities without altering the chemist's workflow.
+* **Innovative Data Collection:** Uses voice micro-feedback ("A LOT", "MEDIUM", "LITTLE") not as a permanent crutch, but as a clever UX trick to dynamically collect labeled data for continuous AI fine-tuning.
+* **Hardware-Software Bridge:** Seamlessly integrates real-time hardware interrupts (C++) with a high-level Python application stack via the Arduino App Lab bridge.
+* **Rich Data Integration:** Integrates dynamically with global scientific databases like PubChem and Sigma-Aldrich to enrich internal inventory metadata seamlessly.
 
 ---
 
-## 🚀 How to Run the Project (For Colleagues)
+## 🏗️ System Architecture
 
-Follow these steps to get the system running locally on your machine.
+### 1. The Hardware: Arduino UNO Q
+* **Dual Power:** Runs Debian OS on the Qualcomm QRB2210 and real-time C++ control on the STM32H5.
+* **RFID Technology:** Uses MFRC522 sensors (similar to Decathlon's self-checkout) to detect when an item is taken from or returned to the pantry. 
+
+### 2. The Code Pipeline
+* **Hardware Layer (`sketch.ino`):** Reads RFID tags and sends data to the Linux subsystem using `Bridge.call("rfid_scan", tag)`.
+* **Backend Layer (`main.py` & `db_utils.py`):** Captures the bridge event (`on_rfid_scan`), updates the SQLite database, and computes session duration.
+* **Frontend Layer (`dashboard.py`):** A Streamlit dashboard that auto-refreshes to show real-time state, handles micro-feedback, and integrates voice assistant queries.
+* **Intelligence Layer:** Predicts residual quantities when users skip manual feedback by analyzing usage durations and lab session patterns.
+
+---
+
+## 🛠️ How to Run the Project (Arduino App Lab)
+
+This project is built using **Arduino App Lab**, a powerful visual and programmatic environment for managing the UNO Q board.
 
 ### Prerequisites
-Make sure you have Python 3.10+ installed.
+- An **Arduino UNO Q** board.
+- Access to the **Arduino App Lab** environment.
 
-### Step 1: Clone and Setup Environment
-Open your terminal and clone the repository (if you haven't already):
-```bash
-# Navigate to the project directory
-cd SMART_LAB_INVENTORY
+### Step-by-Step Deployment
+1. **Open the Project in App Lab:**
+   Launch Arduino App Lab and import the `ambient-intelligence-internship` project folder.
 
-# Create a virtual environment
-python -m venv .venv
+2. **Deploy the Real-Time Sketch (C++):**
+   - Navigate to the `sketch` directory.
+   - Compile and flash `sketch.ino` to the STM32 microcontroller. This enables the RFID sensor bridge.
 
-# Activate the virtual environment
-# On Linux/Mac:
-source .venv/bin/activate
-# On Windows:
-# .venv\Scripts\activate
+3. **Initialize the Environment (Python):**
+   - Open the Linux terminal within App Lab (Debian OS).
+   - Navigate to the `python` directory:
+     ```bash
+     cd python
+     ```
+   - Install dependencies:
+     ```bash
+     pip install -r requirements.txt
+     ```
+   - Initialize the SQLite database:
+     ```bash
+     python setup_db.py
+     ```
 
-# Install the required packages
-pip install -r requirements.txt
-```
-
-### Step 2: Initialize the Database
-The project uses SQLite. Before running the dashboard, you must initialize the database and seed it with demo substances:
-```bash
-python setup_db.py
-```
-*(Note: If you are upgrading from an older version of the database, you can run `python upgrade_db_v2.py` instead to preserve existing data).*
-
-### Step 3: Launch the Dashboard
-Run the Streamlit application:
-```bash
-cd Dashboard
-streamlit run dashboard.py
-```
-A browser window should automatically open at `http://localhost:8501`.
-
-to reset the db: 
-```bash
-cd ArduinoApps/smart-lab-inventory/python
-python3 setup_db.py
-```
-
-
-### Step 4: Try the Demo Workflow
-1. In the dashboard sidebar, under **Demo controls**, click the button for **"Sodium Chloride"**.
-2. Notice the "Checked out" metric flashes and the event is logged. 
-3. Wait a few seconds, then click the **"Sodium Chloride"** button again to return it.
-4. The system will calculate the consumption based on how long you waited. A **Micro-feedback question** will pop up at the top asking if there is enough for another experiment. Answer it to calibrate the model!
-5. Navigate to the **Consumption forecast** tab to see the updated probabilistic depletion curves.
+4. **Launch the Core Services:**
+   - Start the main Python process, which listens to the hardware bridge and serves the Streamlit dashboard:
+     ```bash
+     python main.py
+     ```
+   - The system is now active! The Streamlit dashboard is exposed on the board's local network IP at port `8501`.
 
 ---
 
-## 📂 Project Structure
+## 🤝 Contributing
 
-```text
-INTELLIGENT_ENVIRONMENT/
-├── .gitignore
-├── README.md
-├── db_utils.py               # Core database interaction logic
-├── setup_db.py               # Script to create schemas and seed data
-├── upgrade_db.py             # Script for Phase 1 & 2 schema updates
-├── upgrade_db_v2.py          # Script for Phase 3 schema updates (Sigma-Aldrich)
-├── db/                       # Folder containing the SQLite database
-│   └── inventory.db
-└── Dashboard/
-    ├── dashboard.py          # Main Streamlit application
-    ├── predictive_model.py   # Machine Learning logic (Bayesian updates, scaling)
-    ├── forecast_mock.py      # Generates the probabilistic forecast curves
-    ├── inventory_logic.py    # Search and alert filtering utilities
-    ├── simulated_rfid.py     # Mock RFID scanner inputs
-    └── requirements.txt      # Python dependencies
-```
+We welcome contributions from hardware enthusiasts, ML engineers, and full-stack developers! 
+
+### Future Roadmap
+- **Scale Hardware:** Implement stronger RFID antennas for passive, large-scale scanning without explicit "tap" actions. Enable distributed pantry tracking.
+- **Scale AI:** Transition from synthetic data to large-scale real-world data, enhancing feature engineering to capture cross-substance dependencies.
+- **Scale Customer Base:** Adapt the pipeline for integration into broader industrial pharmacy management systems.
+
+To contribute:
+1. Fork the repository.
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`).
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`).
+4. Push to the branch (`git push origin feature/AmazingFeature`).
+5. Open a Pull Request.
+
+---
+*Built with at Necst Lab in collaboration with Arduino.*

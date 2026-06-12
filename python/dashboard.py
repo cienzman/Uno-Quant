@@ -349,10 +349,18 @@ st.markdown("""
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def format_last_event(raw: str) -> str:
-    """Make last-event strings shorter and consistent."""
+    """
+    Format raw datetime strings from the database into a concise, human-readable format.
+    
+    Args:
+        raw (str): The raw string, typically formatted as "Action at YYYY-MM-DD HH:MM:SS".
+        
+    Returns:
+        str: A shortened representation, e.g., "Returned · 06 Jun 14:32". Returns the 
+             original string if parsing fails.
+    """
     import re
     from datetime import datetime
-    # e.g. "Returned at 2026-06-06 14:32:11" → "Returned · 06 Jun 14:32"
     for verb in ("Returned at", "Checked out at", "Registered at"):
         if raw.startswith(verb):
             rest = raw[len(verb):].strip()
@@ -371,7 +379,16 @@ def format_last_event(raw: str) -> str:
     return raw
 
 
-def load_inventory_from_db():
+def load_inventory_from_db() -> dict:
+    """
+    Load the current state of all chemical substances from the SQLite database.
+    
+    Constructs a dictionary containing rich metadata (e.g., status, hazards, URLs) 
+    mapped by RFID tag ID for fast lookup by the frontend dashboard.
+    
+    Returns:
+        dict: The mapped inventory state dictionary.
+    """
     inventory = {}
     substances = get_all_substances()
     for s in substances:
@@ -403,6 +420,10 @@ def load_inventory_from_db():
 
 
 def initialize_state():
+    """
+    Initialize required Streamlit session state variables to prevent KeyErrors 
+    during early execution loops or component re-renders.
+    """
     if "inventory" not in st.session_state:
         st.session_state.inventory = load_inventory_from_db()
     if "last_event" not in st.session_state:
@@ -414,6 +435,10 @@ def initialize_state():
 
 
 def check_and_trigger_training():
+    """
+    Monitor the global feedback count and automatically spawn an asynchronous 
+    background thread to retrain the AI sequence model when enough data is collected.
+    """
     if get_feedback_count() >= 500:
         st.toast("Training AI model in background...", icon="🧠")
         # Start training in a background thread so we don't block the UI
@@ -424,13 +449,30 @@ def check_and_trigger_training():
         threading.Thread(target=bg_train, daemon=True).start()
 
 def handle_feedback(level: str, fb: dict):
+    """
+    Process manual quantity micro-feedback submitted by the user.
+
+    Args:
+        level (str): The answered quantity level (e.g., "A LOT", "MEDIUM", "LITTLE").
+        fb (dict): A dictionary containing context about the targeted session and item.
+    """
     update_substance_quantity(fb["tag_id"], level)
     st.session_state.pending_feedback = None
     st.session_state.inventory = load_inventory_from_db()
     check_and_trigger_training()
 
 
-def inventory_to_dataframe(inventory):
+def inventory_to_dataframe(inventory: dict) -> pd.DataFrame:
+    """
+    Transform the structured inventory dictionary into a tabular Pandas DataFrame 
+    for rendering in Streamlit's data grid UI.
+
+    Args:
+        inventory (dict): The mapped inventory state dictionary.
+
+    Returns:
+        pd.DataFrame: A formatted dataframe mapping the inventory context.
+    """
     rows = []
     quantity_emojis = {
         "A LOT": "🟢 A LOT",
@@ -453,7 +495,13 @@ def inventory_to_dataframe(inventory):
     return pd.DataFrame(rows)
 
 
-def load_events():
+def load_events() -> pd.DataFrame:
+    """
+    Query the SQLite database for an ordered history of substance usage sessions.
+
+    Returns:
+        pd.DataFrame: A DataFrame representing historical check-out/check-in events.
+    """
     with get_conn() as conn:
         query = """
             SELECT s.taken_at, s.returned_at, s.session_duration_s, sub.substance_name, s.rfid_tag_id
@@ -479,6 +527,16 @@ def load_events():
 
 
 def run_scan(tag_id: str):
+    """
+    Handle the logical processing of a detected RFID tag scan event.
+    
+    Toggles the state of a registered substance between 'ON_SHELF' and 'IN_USE',
+    opens/closes usage sessions, prompts user micro-feedback upon return, 
+    and handles unrecognized tags gracefully.
+
+    Args:
+        tag_id (str): The detected RFID tag.
+    """
     substance = get_substance(tag_id)
     if not substance:
         st.session_state.last_event = {
@@ -518,6 +576,7 @@ def run_scan(tag_id: str):
 
 
 def section_header(icon: str, title: str, caption: str = ""):
+    """Render a styled section header widget using HTML."""
     st.markdown(
         f"""
         <div class="section-header">
@@ -533,6 +592,7 @@ def section_header(icon: str, title: str, caption: str = ""):
 
 
 def quick_card(label: str, value: int | str, note: str):
+    """Render a styled high-level metric card widget using HTML."""
     st.markdown(
         f"""
         <div class="quick-card">
@@ -546,6 +606,7 @@ def quick_card(label: str, value: int | str, note: str):
 
 
 def render_last_event():
+    """Render a dynamically styled alert banner displaying the most recent hardware event."""
     if not st.session_state.last_event:
         st.markdown(
             """
@@ -582,6 +643,16 @@ def render_last_event():
 
 
 def style_inventory_table(df: pd.DataFrame):
+    """
+    Apply row-level CSS highlighting rules to the rendered inventory DataFrame 
+    based on substance status and quantity thresholds.
+
+    Args:
+        df (pd.DataFrame): The unstyled inventory DataFrame.
+
+    Returns:
+        pd.io.formats.style.Styler: The styled DataFrame object ready for rendering.
+    """
     def highlight_status(val):
         if val == "Checked out" or val == "IN USE":
             return "background-color: #fff0ed; color: #c0392b; font-weight: 800;"
@@ -606,9 +677,13 @@ def style_inventory_table(df: pd.DataFrame):
 # ── Boot ──────────────────────────────────────────────────────────────────────
 initialize_state()
 
-# Poll hardware RFID scans every 3 s
+# Poll hardware RFID scans every 3 s to keep UI responsive
 @st.fragment(run_every=3)
 def poll_rfid():
+    """
+    Streamlit asynchronous fragment that periodically polls the database 
+    for newly queued hardware RFID events from the Arduino C++ layer.
+    """
     pending_tags = get_and_clear_pending_scans()
     if pending_tags:
         for p_tag in pending_tags:
